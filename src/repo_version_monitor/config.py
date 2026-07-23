@@ -7,6 +7,7 @@ import re
 import tomllib
 
 _REPOSITORY_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+_PRODUCT_NAME_PATTERN = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,7 @@ class AppConfig:
 
 
 def add_product_to_config(path: Path, name: str, repository: str) -> None:
+    validate_product_name(name)
     validate_repository(repository)
     products = load_products(path)
     if any(product.repository == repository for product in products):
@@ -72,9 +74,11 @@ def load_products(path: Path) -> list[ProductConfig]:
 
     products = []
     for item in raw.get("products", []):
+        name = item["name"]
         repository = item["repository"]
+        validate_product_name(name)
         validate_repository(repository)
-        products.append(ProductConfig(name=item["name"], repository=repository))
+        products.append(ProductConfig(name=name, repository=repository))
     return products
 
 
@@ -137,6 +141,14 @@ def load_config(path: Path) -> AppConfig:
         ),
         products=products,
     )
+
+
+def validate_product_name(name: str) -> None:
+    if not _PRODUCT_NAME_PATTERN.fullmatch(name):
+        raise ValueError(
+            f"Invalid product name {name!r}: only letters (A-Z, a-z), digits, "
+            "'-', '_' and '.' are allowed."
+        )
 
 
 def validate_repository(repository: str) -> None:

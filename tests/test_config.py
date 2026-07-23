@@ -38,6 +38,39 @@ repository = "encode/httpx"
         add_product_to_config(config_path, "HTTPX", "encode/httpx")
 
 
+@pytest.mark.parametrize("name", ["监控工具", "bad name", "name!", ""])
+def test_add_product_rejects_invalid_name(tmp_path: Path, name: str) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Invalid product name"):
+        add_product_to_config(config_path, name, "encode/httpx")
+
+
+def test_add_product_accepts_dotted_name(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    add_product_to_config(config_path, "zlib.net", "madler/zlib")
+
+    assert load_products(config_path)[0].name == "zlib.net"
+
+
+def test_load_products_rejects_invalid_name_in_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[[products]]
+name = "版本监控"
+repository = "encode/httpx"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Invalid product name"):
+        load_products(config_path)
+
+
 def test_mailgun_disabled_requires_no_mailgun_settings(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("MAILGUN_API_KEY", raising=False)
     config_path = tmp_path / "config.toml"

@@ -15,6 +15,23 @@ from repo_version_monitor.db import VersionStore
 from repo_version_monitor.monitor import VersionMonitor
 
 
+def _render_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> list[str]:
+    """Render rows as aligned columns; the first column (ID) is right-aligned."""
+    widths = [
+        max(len(headers[i]), *(len(row[i]) for row in rows)) if rows else len(headers[i])
+        for i in range(len(headers))
+    ]
+
+    def render_row(row: tuple[str, ...]) -> str:
+        cells = [
+            cell.rjust(widths[i]) if i == 0 else cell.ljust(widths[i])
+            for i, cell in enumerate(row)
+        ]
+        return "  ".join(cells).rstrip()
+
+    return [render_row(headers), *(render_row(row) for row in rows)]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Monitor GitHub tags and notify via Mailgun.")
     parser.add_argument("--config", default="config.toml", type=Path, help="Path to TOML config.")
@@ -50,21 +67,26 @@ def main() -> None:
 
     if args.command == "list":
         products = load_products(args.config)
+        if not products:
+            print("No repositories configured.")
+            return
+
         store = VersionStore(resolve_database_path(args.config))
         stored_by_repository = {
             product.repository: product
             for product in store.list_products()
         }
 
-        if not products:
-            print("No repositories configured.")
-            return
-
-        print("Configured repositories:")
-        for product in products:
+        rows = []
+        for index, product in enumerate(
+            sorted(products, key=lambda product: product.name.casefold()), start=1
+        ):
             stored = stored_by_repository.get(product.repository)
             latest_tag = stored.latest_tag if stored and stored.latest_tag else "(not checked yet)"
-            print(f"- {product.name}: {product.repository} | latest tag: {latest_tag}")
+            rows.append((str(index), product.name, product.repository, latest_tag))
+
+        for line in _render_table(("ID", "NAME", "REPOSITORY", "LATEST TAG"), rows):
+            print(line)
         return
 
     config = load_config(args.config)

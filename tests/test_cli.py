@@ -1,0 +1,48 @@
+import sys
+from pathlib import Path
+
+from repo_version_monitor.cli import _render_table, main
+
+
+def test_render_table_alignment() -> None:
+    lines = _render_table(
+        ("ID", "NAME", "REPOSITORY", "LATEST TAG"),
+        [
+            ("1", "FastAPI", "fastapi/fastapi", "0.116.0"),
+            ("10", "httpx", "encode/httpx", "(not checked yet)"),
+        ],
+    )
+
+    assert lines[0].startswith("ID  NAME")
+    # ID column right-aligned
+    assert lines[1].startswith(" 1  ")
+    assert lines[2].startswith("10  ")
+    # NAME column starts at the same offset on every line
+    offset = lines[0].index("NAME")
+    assert lines[1].index("FastAPI") == offset
+    assert lines[2].index("httpx") == offset
+
+
+def test_list_sorted_by_name_with_ids(tmp_path: Path, capsys, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[[products]]
+name = "zlib"
+repository = "madler/zlib"
+
+[[products]]
+name = "FastAPI"
+repository = "fastapi/fastapi"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys, "argv", ["repo-version-monitor", "--config", str(config_path), "list"])
+
+    main()
+
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].split() == ["ID", "NAME", "REPOSITORY", "LATEST", "TAG"]
+    # case-insensitive sort by name: FastAPI before zlib, ids from 1
+    assert lines[1].split()[:3] == ["1", "FastAPI", "fastapi/fastapi"]
+    assert lines[2].split()[:3] == ["2", "zlib", "madler/zlib"]
