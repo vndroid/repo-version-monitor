@@ -1,0 +1,29 @@
+[database]
+path = "versions.sqlite3"
+
+[github]
+# Optional. You can also set GITHUB_TOKEN in the environment.
+token_env = "GITHUB_TOKEN"
+per_page = 10
+
+[mailgun]
+# Required values. api_key should normally come from MAILGUN_API_KEY.
+domain = "mg.example.com"
+api_key_env = "MAILGUN_API_KEY"
+from_email = "Version Monitor <monitor@mg.example.com>"
+to_emails = ["you@example.com"]
+# For EU Mailgun accounts, use "https://api.eu.mailgun.net/v3".
+base_url = "https://api.mailgun.net/v3"
+
+[monitor]
+interval_seconds = 3600
+notify_on_first_seen = false
+
+[[products]]
+name = "httpx"
+repository = "encode/httpx"
+
+[[products]]
+name = "FastAPI"
+repository = "fastapi/fastapi"
+
