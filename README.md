@@ -56,3 +56,20 @@ uv run repo-version-monitor --config config.toml run --interval 1800
 ```
 
 首次发现某个产品时，默认只写入数据库，不发送邮件；这样可以避免初始化时收到一堆“更新”。如果希望首次也通知，把配置中的 `notify_on_first_seen` 改成 `true`。
+
+## 关闭邮件通知
+
+把配置中的 `[mailgun]` 段的 `enabled` 改成 `false` 即可关闭邮件通知（默认为 `true`）。关闭后：
+
+- 检查逻辑照常运行，版本变化仍会写入数据库（`tag_events` 中 `notified_at` 保持为 NULL）；
+- 不再需要设置 `MAILGUN_API_KEY` 及其他 mailgun 配置项。
+
+## 补发漏掉的通知
+
+发信失败或关闭通知期间检测到的更新，都会以 `notified_at IS NULL` 留在数据库里。重新开启通知后，可以一次性补发：
+
+```bash
+repo-version-monitor --config config.toml resend
+```
+
+补发成功后事件会被标记为已通知，重复执行不会重复发信。

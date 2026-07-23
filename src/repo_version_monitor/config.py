@@ -23,6 +23,7 @@ class GitHubConfig:
 
 @dataclass(frozen=True)
 class MailgunConfig:
+    enabled: bool
     domain: str
     api_key: str = field(repr=False)
     from_email: str
@@ -98,9 +99,10 @@ def load_config(path: Path) -> AppConfig:
 
     db_path = resolve_database_path(path)
 
+    mailgun_enabled = bool(mailgun_raw.get("enabled", True))
     api_key_env = mailgun_raw.get("api_key_env", "MAILGUN_API_KEY")
     api_key = mailgun_raw.get("api_key") or os.getenv(api_key_env)
-    if not api_key:
+    if mailgun_enabled and not api_key:
         raise ValueError(f"Mailgun API key is missing. Set {api_key_env} or mailgun.api_key.")
 
     token_env = github_raw.get("token_env", "GITHUB_TOKEN")
@@ -117,10 +119,16 @@ def load_config(path: Path) -> AppConfig:
             per_page=min(max(int(github_raw.get("per_page", 10)), 1), 100),
         ),
         mailgun=MailgunConfig(
-            domain=mailgun_raw["domain"],
-            api_key=api_key,
-            from_email=mailgun_raw["from_email"],
-            to_emails=list(mailgun_raw["to_emails"]),
+            enabled=mailgun_enabled,
+            # When disabled, no Mailgun settings are required.
+            domain=mailgun_raw["domain"] if mailgun_enabled else mailgun_raw.get("domain", ""),
+            api_key=api_key or "",
+            from_email=(
+                mailgun_raw["from_email"] if mailgun_enabled else mailgun_raw.get("from_email", "")
+            ),
+            to_emails=list(
+                mailgun_raw["to_emails"] if mailgun_enabled else mailgun_raw.get("to_emails", [])
+            ),
             base_url=mailgun_raw.get("base_url", "https://api.mailgun.net/v3").rstrip("/"),
         ),
         monitor=MonitorConfig(

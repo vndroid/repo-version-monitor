@@ -14,6 +14,15 @@ class StoredProduct:
     latest_tag: str | None
 
 
+@dataclass(frozen=True)
+class UnnotifiedEvent:
+    event_id: int
+    product_name: str
+    repository: str
+    old_tag: str | None
+    new_tag: str
+
+
 class VersionStore:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -92,6 +101,33 @@ class VersionStore:
                 (repository, old_tag, new_tag, _now()),
             )
             return int(cursor.lastrowid)
+
+    def list_unnotified_events(self) -> list[UnnotifiedEvent]:
+        if not self.path.exists():
+            return []
+
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT e.id, e.repository, e.old_tag, e.new_tag,
+                       COALESCE(p.name, e.repository) AS product_name
+                FROM tag_events AS e
+                LEFT JOIN products AS p ON p.repository = e.repository
+                WHERE e.notified_at IS NULL
+                ORDER BY e.id
+                """
+            ).fetchall()
+
+        return [
+            UnnotifiedEvent(
+                event_id=row["id"],
+                product_name=row["product_name"],
+                repository=row["repository"],
+                old_tag=row["old_tag"],
+                new_tag=row["new_tag"],
+            )
+            for row in rows
+        ]
 
     def mark_notified(self, event_id: int) -> None:
         with closing(self._connect()) as connection, connection:

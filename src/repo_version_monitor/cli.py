@@ -29,6 +29,10 @@ def main() -> None:
 
     subparsers.add_parser("list", help="List configured repositories and known latest tags.")
 
+    subparsers.add_parser(
+        "resend", help="Resend email for updates whose notification was never sent."
+    )
+
     run_parser = subparsers.add_parser("run", help="Run checks forever.")
     run_parser.add_argument("--interval", type=int, default=None, help="Seconds between checks.")
 
@@ -69,6 +73,20 @@ def main() -> None:
     if args.command == "check":
         updates = asyncio.run(monitor.check_once())
         print(f"Detected {len(updates)} update(s).")
+        for update in updates:
+            old_tag = update.old_tag or "(first seen)"
+            print(f"- {update.product_name}: {old_tag} -> {update.new_tag}")
+        return
+
+    if args.command == "resend":
+        if not config.mailgun.enabled:
+            print("Email notifications are disabled (mailgun.enabled = false); nothing sent.")
+            return
+        updates = asyncio.run(monitor.resend_unnotified())
+        if not updates:
+            print("No unnotified updates found.")
+            return
+        print(f"Resent notification for {len(updates)} update(s).")
         for update in updates:
             old_tag = update.old_tag or "(first seen)"
             print(f"- {update.product_name}: {old_tag} -> {update.new_tag}")

@@ -78,11 +78,35 @@ class VersionMonitor:
                     logger.info("%s is unchanged at %s", product.repository, latest_tag)
 
             if updates:
-                # Events with notified_at IS NULL indicate a failed/missed email.
-                await self.mailgun.send_updates(client, updates)
-                for event_id in event_ids:
-                    self.store.mark_notified(event_id)
+                if self.config.mailgun.enabled:
+                    # Events with notified_at IS NULL indicate a failed/missed email.
+                    await self.mailgun.send_updates(client, updates)
+                    for event_id in event_ids:
+                        self.store.mark_notified(event_id)
+                else:
+                    logger.info(
+                        "Email notifications disabled; skipping email for %d update(s).",
+                        len(updates),
+                    )
 
+        return updates
+
+    async def resend_unnotified(self) -> list[VersionUpdate]:
+        """Resend email for recorded events whose notification never went out."""
+        self.store.initialize()
+        events = self.store.list_unnotified_events()
+        if not events:
+            return []
+
+        updates = [
+            VersionUpdate(event.product_name, event.repository, event.old_tag, event.new_tag)
+            for event in events
+        ]
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            await self.mailgun.send_updates(client, updates)
+        for event in events:
+            self.store.mark_notified(event.event_id)
+        logger.info("Resent notification for %d event(s).", len(events))
         return updates
 
     async def run_forever(self, interval_seconds: int | None = None) -> None:
