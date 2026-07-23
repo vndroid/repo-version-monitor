@@ -30,11 +30,16 @@ class VersionMonitor:
         self.store.initialize()
         updates: list[VersionUpdate] = []
         event_ids: list[int] = []
-        version_updates: list[tuple[str, str, str]] = []
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             for product in self.config.products:
-                tags = await self.github.fetch_tags(client, product.repository)
+                # One failing repository must not abort checks for the rest.
+                try:
+                    tags = await self.github.fetch_tags(client, product.repository)
+                except httpx.HTTPError:
+                    logger.exception("Failed to fetch tags for %s", product.repository)
+                    continue
+
                 if not tags:
                     logger.warning("No tags found for %s", product.repository)
                     continue
@@ -43,22 +48,22 @@ class VersionMonitor:
                 stored = self.store.get_product(product.repository)
 
                 if stored is None:
+                    # Persist immediately so a later mail failure never causes
+                    # duplicate events for the same tag on the next cycle.
+                    self.store.upsert_product(product.name, product.repository, latest_tag)
                     if self.config.monitor.notify_on_first_seen:
-                        version_updates.append((product.name, product.repository, latest_tag))
-                        event_id = self.store.record_event(product.repository, None, latest_tag)
-                        event_ids.append(event_id)
+                        event_ids.append(
+                            self.store.record_event(product.repository, None, latest_tag)
+                        )
                         updates.append(
                             VersionUpdate(product.name, product.repository, None, latest_tag)
                         )
-                    else:
-                        self.store.upsert_product(product.name, product.repository, latest_tag)
                     logger.info("Initialized %s at %s", product.repository, latest_tag)
-                    continue
-
-                if stored.latest_tag != latest_tag:
-                    event_id = self.store.record_event(product.repository, stored.latest_tag, latest_tag)
-                    version_updates.append((product.name, product.repository, latest_tag))
-                    event_ids.append(event_id)
+                elif stored.latest_tag != latest_tag:
+                    self.store.upsert_product(product.name, product.repository, latest_tag)
+                    event_ids.append(
+                        self.store.record_event(product.repository, stored.latest_tag, latest_tag)
+                    )
                     updates.append(
                         VersionUpdate(product.name, product.repository, stored.latest_tag, latest_tag)
                     )
@@ -73,9 +78,8 @@ class VersionMonitor:
                     logger.info("%s is unchanged at %s", product.repository, latest_tag)
 
             if updates:
+                # Events with notified_at IS NULL indicate a failed/missed email.
                 await self.mailgun.send_updates(client, updates)
-                for name, repository, latest_tag in version_updates:
-                    self.store.upsert_product(name, repository, latest_tag)
                 for event_id in event_ids:
                     self.store.mark_notified(event_id)
 

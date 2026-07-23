@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 from pathlib import Path
+import re
 import tomllib
+
+_REPOSITORY_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 
 
 @dataclass(frozen=True)
@@ -14,14 +17,14 @@ class ProductConfig:
 
 @dataclass(frozen=True)
 class GitHubConfig:
-    token: str | None
+    token: str | None = field(repr=False)
     per_page: int
 
 
 @dataclass(frozen=True)
 class MailgunConfig:
     domain: str
-    api_key: str
+    api_key: str = field(repr=False)
     from_email: str
     to_emails: list[str]
     base_url: str
@@ -68,10 +71,15 @@ def load_config(path: Path) -> AppConfig:
     token_env = github_raw.get("token_env", "GITHUB_TOKEN")
     token = github_raw.get("token") or os.getenv(token_env)
 
-    products = [
-        ProductConfig(name=item["name"], repository=item["repository"])
-        for item in raw.get("products", [])
-    ]
+    products = []
+    for item in raw.get("products", []):
+        repository = item["repository"]
+        if not _REPOSITORY_PATTERN.fullmatch(repository):
+            raise ValueError(
+                f"Invalid repository {repository!r}: expected 'owner/name' with only "
+                "letters, digits, '-', '_' and '.'."
+            )
+        products.append(ProductConfig(name=item["name"], repository=repository))
     if not products:
         raise ValueError("At least one [[products]] entry is required.")
 
@@ -79,7 +87,7 @@ def load_config(path: Path) -> AppConfig:
         database=DatabaseConfig(path=db_path),
         github=GitHubConfig(
             token=token,
-            per_page=int(github_raw.get("per_page", 10)),
+            per_page=min(max(int(github_raw.get("per_page", 10)), 1), 100),
         ),
         mailgun=MailgunConfig(
             domain=mailgun_raw["domain"],

@@ -20,7 +20,7 @@ class VersionStore:
 
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS products (
@@ -55,7 +55,7 @@ class VersionStore:
 
     def upsert_product(self, name: str, repository: str, latest_tag: str | None) -> None:
         now = _now()
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 """
                 INSERT INTO products (repository, name, latest_tag, updated_at)
@@ -69,7 +69,7 @@ class VersionStore:
             )
 
     def record_event(self, repository: str, old_tag: str | None, new_tag: str) -> int:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             cursor = connection.execute(
                 """
                 INSERT INTO tag_events (repository, old_tag, new_tag, detected_at)
@@ -80,7 +80,7 @@ class VersionStore:
             return int(cursor.lastrowid)
 
     def mark_notified(self, event_id: int) -> None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 "UPDATE tag_events SET notified_at = ? WHERE id = ?",
                 (_now(), event_id),

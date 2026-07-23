@@ -19,8 +19,8 @@ class GitHubClient:
     async def fetch_tags(self, client: httpx.AsyncClient, repository: str) -> list[GitHubTag]:
         headers = {
             "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2026-03-10",
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "repo-version-monitor/0.1.0",
         }
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"

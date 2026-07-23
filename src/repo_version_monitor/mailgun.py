@@ -47,23 +47,32 @@ class MailgunClient:
         response.raise_for_status()
 
 
+def _clean(value: str) -> str:
+    """Strip control characters (CR/LF etc.) from remote-supplied strings.
+
+    Tag names come from repositories we do not control; without this a tag
+    like "v1.0\\r\\nBcc: x@evil.com" could inject email headers.
+    """
+    return "".join(c for c in value if c.isprintable())
+
+
 def _subject(updates: list[VersionUpdate]) -> str:
     if len(updates) == 1:
         update = updates[0]
-        return f"{update.product_name} has a new tag: {update.new_tag}"
+        return f"{_clean(update.product_name)} has a new tag: {_clean(update.new_tag)}"
     return f"{len(updates)} repositories have new tags"
 
 
 def _body(updates: list[VersionUpdate]) -> str:
     lines = ["Detected GitHub tag updates:", ""]
     for update in updates:
-        previous = update.old_tag or "(first seen)"
+        previous = _clean(update.old_tag) if update.old_tag else "(first seen)"
         lines.extend(
             [
-                f"- {update.product_name}",
+                f"- {_clean(update.product_name)}",
                 f"  Repository: https://github.com/{update.repository}",
                 f"  Previous: {previous}",
-                f"  Current:  {update.new_tag}",
+                f"  Current:  {_clean(update.new_tag)}",
                 "",
             ]
         )
