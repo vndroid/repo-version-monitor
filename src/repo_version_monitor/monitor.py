@@ -102,8 +102,9 @@ class VersionMonitor:
             VersionUpdate(event.product_name, event.repository, event.old_tag, event.new_tag)
             for event in events
         ]
+        # Always one all-in-one email covering the whole backlog.
         async with httpx.AsyncClient(timeout=30.0) as client:
-            await self.mailgun.send_updates(client, updates)
+            await self.mailgun.send_updates(client, updates, subject_prefix="accumulation:")
         for event in events:
             self.store.mark_notified(event.event_id)
         logger.info("Resent notification for %d event(s).", len(events))

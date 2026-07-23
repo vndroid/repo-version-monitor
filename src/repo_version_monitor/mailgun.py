@@ -28,11 +28,17 @@ class MailgunClient:
         self.to_emails = to_emails
         self.base_url = base_url.rstrip("/")
 
-    async def send_updates(self, client: httpx.AsyncClient, updates: list[VersionUpdate]) -> None:
+    async def send_updates(
+        self,
+        client: httpx.AsyncClient,
+        updates: list[VersionUpdate],
+        subject_prefix: str = "",
+    ) -> None:
+        """Send one email covering all updates (all-in-one, regardless of count)."""
         if not updates:
             return
 
-        subject = _subject(updates)
+        subject = f"{subject_prefix}{_subject(updates)}"
         text = _body(updates)
         response = await client.post(
             f"{self.base_url}/{self.domain}/messages",
