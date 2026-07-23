@@ -53,6 +53,20 @@ class VersionStore:
             return None
         return StoredProduct(name=row["name"], repository=row["repository"], latest_tag=row["latest_tag"])
 
+    def list_products(self) -> list[StoredProduct]:
+        if not self.path.exists():
+            return []
+
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT name, repository, latest_tag FROM products ORDER BY name, repository"
+            ).fetchall()
+
+        return [
+            StoredProduct(name=row["name"], repository=row["repository"], latest_tag=row["latest_tag"])
+            for row in rows
+        ]
+
     def upsert_product(self, name: str, repository: str, latest_tag: str | None) -> None:
         now = _now()
         with closing(self._connect()) as connection, connection:
@@ -94,4 +108,3 @@ class VersionStore:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
-

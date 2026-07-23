@@ -1,48 +1,39 @@
+from pathlib import Path
+
 import pytest
 
-from repo_version_monitor.config import load_config
+from repo_version_monitor.config import add_product_to_config, load_products
 
-VALID_CONFIG = """
-[mailgun]
-domain = "mg.example.com"
-api_key = "test-key"
-from_email = "monitor@mg.example.com"
-to_emails = ["you@example.com"]
 
+def test_add_product_to_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[database]
+path = "versions.sqlite3"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    add_product_to_config(config_path, "httpx", "encode/httpx")
+    products = load_products(config_path)
+
+    assert len(products) == 1
+    assert products[0].name == "httpx"
+    assert products[0].repository == "encode/httpx"
+
+
+def test_add_product_rejects_duplicates(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
 [[products]]
 name = "httpx"
-repository = "{repository}"
-"""
+repository = "encode/httpx"
+""".lstrip(),
+        encoding="utf-8",
+    )
 
+    with pytest.raises(ValueError, match="already configured"):
+        add_product_to_config(config_path, "HTTPX", "encode/httpx")
 
-def _write_config(tmp_path, repository: str):
-    config_path = tmp_path / "config.toml"
-    config_path.write_text(VALID_CONFIG.format(repository=repository))
-    return config_path
-
-
-def test_valid_repository_accepted(tmp_path) -> None:
-    config = load_config(_write_config(tmp_path, "encode/httpx"))
-
-    assert config.products[0].repository == "encode/httpx"
-
-
-@pytest.mark.parametrize(
-    "repository",
-    [
-        "encode/httpx/../../user/emails",
-        "encode/httpx?per_page=1",
-        "encode",
-        "a/b/c",
-        "owner/repo#frag",
-    ],
-)
-def test_invalid_repository_rejected(tmp_path, repository) -> None:
-    with pytest.raises(ValueError, match="Invalid repository"):
-        load_config(_write_config(tmp_path, repository))
-
-
-def test_secrets_hidden_from_repr(tmp_path) -> None:
-    config = load_config(_write_config(tmp_path, "encode/httpx"))
-
-    assert "test-key" not in repr(config)

@@ -25,23 +25,34 @@ export MAILGUN_API_KEY="key-xxx"
 
 ## 使用
 
+添加一个公开仓库：
+
+```bash
+uv run repo-version-monitor --config config.toml add encode/httpx --name httpx
+```
+
+查看当前监控的仓库：
+
+```bash
+uv run repo-version-monitor --config config.toml list
+```
+
 单次检查：
 
 ```bash
-repo-version-monitor --config config.toml check
+uv run repo-version-monitor --config config.toml check
 ```
 
 循环定时检查：
 
 ```bash
-repo-version-monitor --config config.toml run
+uv run repo-version-monitor --config config.toml run
 ```
 
 也可以覆盖配置中的间隔：
 
 ```bash
-repo-version-monitor --config config.toml run --interval 1800
+uv run repo-version-monitor --config config.toml run --interval 1800
 ```
 
 首次发现某个产品时，默认只写入数据库，不发送邮件；这样可以避免初始化时收到一堆“更新”。如果希望首次也通知，把配置中的 `notify_on_first_seen` 改成 `true`。
-

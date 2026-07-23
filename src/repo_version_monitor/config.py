@@ -50,6 +50,43 @@ class AppConfig:
     products: list[ProductConfig]
 
 
+def add_product_to_config(path: Path, name: str, repository: str) -> None:
+    validate_repository(repository)
+    products = load_products(path)
+    if any(product.repository == repository for product in products):
+        raise ValueError(f"{repository} is already configured.")
+
+    with path.open("a", encoding="utf-8") as file:
+        file.write(
+            "\n"
+            "[[products]]\n"
+            f'name = "{_escape_toml_string(name)}"\n'
+            f'repository = "{repository}"\n'
+        )
+
+
+def load_products(path: Path) -> list[ProductConfig]:
+    with path.open("rb") as file:
+        raw = tomllib.load(file)
+
+    products = []
+    for item in raw.get("products", []):
+        repository = item["repository"]
+        validate_repository(repository)
+        products.append(ProductConfig(name=item["name"], repository=repository))
+    return products
+
+
+def resolve_database_path(config_path: Path) -> Path:
+    with config_path.open("rb") as file:
+        raw = tomllib.load(file)
+
+    db_path = Path(raw.get("database", {}).get("path", "versions.sqlite3"))
+    if not db_path.is_absolute():
+        db_path = config_path.parent / db_path
+    return db_path
+
+
 def load_config(path: Path) -> AppConfig:
     with path.open("rb") as file:
         raw = tomllib.load(file)
@@ -59,9 +96,7 @@ def load_config(path: Path) -> AppConfig:
     database_raw = raw.get("database", {})
     monitor_raw = raw.get("monitor", {})
 
-    db_path = Path(database_raw.get("path", "versions.sqlite3"))
-    if not db_path.is_absolute():
-        db_path = path.parent / db_path
+    db_path = resolve_database_path(path)
 
     api_key_env = mailgun_raw.get("api_key_env", "MAILGUN_API_KEY")
     api_key = mailgun_raw.get("api_key") or os.getenv(api_key_env)
@@ -71,15 +106,7 @@ def load_config(path: Path) -> AppConfig:
     token_env = github_raw.get("token_env", "GITHUB_TOKEN")
     token = github_raw.get("token") or os.getenv(token_env)
 
-    products = []
-    for item in raw.get("products", []):
-        repository = item["repository"]
-        if not _REPOSITORY_PATTERN.fullmatch(repository):
-            raise ValueError(
-                f"Invalid repository {repository!r}: expected 'owner/name' with only "
-                "letters, digits, '-', '_' and '.'."
-            )
-        products.append(ProductConfig(name=item["name"], repository=repository))
+    products = load_products(path)
     if not products:
         raise ValueError("At least one [[products]] entry is required.")
 
@@ -103,3 +130,14 @@ def load_config(path: Path) -> AppConfig:
         products=products,
     )
 
+
+def validate_repository(repository: str) -> None:
+    if not _REPOSITORY_PATTERN.fullmatch(repository):
+        raise ValueError(
+            f"Invalid repository {repository!r}: expected 'owner/name' with only "
+            "letters, digits, '-', '_' and '.'."
+        )
+
+
+def _escape_toml_string(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
