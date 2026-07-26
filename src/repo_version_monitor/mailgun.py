@@ -52,6 +52,22 @@ class MailgunClient:
         )
         response.raise_for_status()
 
+    async def send_test(self, client: httpx.AsyncClient) -> httpx.Response:
+        """Send a test email; returns the raw response so callers can report the result."""
+        return await client.post(
+            f"{self.base_url}/{self.domain}/messages",
+            auth=("api", self.api_key),
+            data={
+                "from": self.from_email,
+                "to": self.to_emails,
+                "subject": "repo-version-monitor test email",
+                "text": (
+                    "This is a test email from repo-version-monitor.\n"
+                    "If you received it, your Mailgun configuration works."
+                ),
+            },
+        )
+
 
 def _clean(value: str) -> str:
     """Strip control characters (CR/LF etc.) from remote-supplied strings.

@@ -6,6 +6,8 @@ import logging
 from pathlib import Path
 import time
 
+import httpx
+
 from repo_version_monitor.config import (
     add_product_to_config,
     config_file_hash,
@@ -74,6 +76,10 @@ def main() -> None:
 
     subparsers.add_parser(
         "resend", help="Resend email for updates whose notification was never sent."
+    )
+
+    subparsers.add_parser(
+        "mailtest", help="Verify mail settings and send a test email via Mailgun."
     )
 
     run_parser = subparsers.add_parser("run", help="Run checks forever.")
@@ -174,6 +180,48 @@ def main() -> None:
         for update in updates:
             old_tag = update.old_tag or "(first seen)"
             print(f"- {update.product_name}: {old_tag} -> {update.new_tag}")
+        return
+
+    if args.command == "mailtest":
+        mg = config.mailgun
+        if not mg.enabled:
+            print("Email notifications are disabled (mailgun.enabled = false); enable them first.")
+            return
+        print("Mailgun configuration:")
+        print(f"  domain:   {mg.domain}")
+        print(f"  from:     {mg.from_email}")
+        print(f"  to:       {', '.join(mg.to_emails) or '(empty)'}")
+        print(f"  base_url: {mg.base_url}")
+        print(f"  api_key:  {mg.api_key_source or 'not set'}")
+
+        problems = [
+            f"{field} is empty"
+            for field, value in (
+                ("mailgun.domain", mg.domain),
+                ("mailgun.from_email", mg.from_email),
+                ("mailgun.to_emails", mg.to_emails),
+            )
+            if not value
+        ]
+        if problems:
+            for problem in problems:
+                print(f"Config problem: {problem}")
+            return
+
+        async def _send_test() -> httpx.Response:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                return await monitor.mailgun.send_test(client)
+
+        print("Sending test email...")
+        start = time.monotonic()
+        try:
+            response = asyncio.run(_send_test())
+        except httpx.HTTPError as exc:
+            print(f"Send failed ({time.monotonic() - start:.1f}s): {exc}")
+            return
+        status = "Success" if response.is_success else "Failed"
+        print(f"{status} (HTTP {response.status_code}) in {time.monotonic() - start:.1f}s.")
+        print(f"Response: {response.text.strip()}")
         return
 
     if args.command == "resend":

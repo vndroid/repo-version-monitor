@@ -2,10 +2,12 @@
 
 定时检查 GitHub 仓库 tags，与本地 SQLite 中保存的版本对比；发现新 tag 后，通过 Mailgun API 使用 `httpx` 发送邮件通知。
 
+邮件发送使用 Mailgun API，具体可参考[官方手册](https://documentation.mailgun.com/docs/mailgun/user-manual/sending-messages/send-http)。
+
 ## 安装
 
 ```bash
-python -m pip install -e .
+python3 -m pip install -e .
 ```
 
 ## 配置
@@ -53,6 +55,12 @@ uv run repo-version-monitor --config config.toml add postgres/postgres --name pg
 
 ```bash
 uv run repo-version-monitor --config config.toml list
+```
+
+发送测试邮件（检查邮件配置并跟踪发送结果）：
+
+```bash
+uv run repo-version-monitor --config config.toml mailtest
 ```
 
 单次检查：
