@@ -77,13 +77,14 @@ def main() -> None:
             for product in store.list_products()
         }
 
+        id_width = 3 if len(products) >= 100 else 2
         rows = []
         for index, product in enumerate(
             sorted(products, key=lambda product: product.name.casefold()), start=1
         ):
             stored = stored_by_repository.get(product.repository)
             latest_tag = stored.latest_tag if stored and stored.latest_tag else "(not checked yet)"
-            rows.append((str(index), product.name, product.repository, latest_tag))
+            rows.append((str(index).zfill(id_width), product.name, product.repository, latest_tag))
 
         for line in _render_table(("ID", "NAME", "REPOSITORY", "LATEST TAG"), rows):
             print(line)
