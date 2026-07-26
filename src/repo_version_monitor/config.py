@@ -84,9 +84,8 @@ def add_product_to_config(
             "[[products]]\n"
             f'name = "{_escape_toml_string(name)}"\n'
             f'repository = "{repository}"\n'
+            f'branch = "{_escape_toml_string(branch or "")}"\n'
         )
-        if branch:
-            file.write(f'branch = "{_escape_toml_string(branch)}"\n')
 
 
 def format_config(path: Path, template_path: Path | None = None) -> str:

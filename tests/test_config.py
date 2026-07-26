@@ -26,6 +26,9 @@ path = "versions.sqlite3"
     assert len(products) == 1
     assert products[0].name == "httpx"
     assert products[0].repository == "encode/httpx"
+    assert products[0].branch is None
+    # branch key is always written, empty when not specified
+    assert 'branch = ""' in config_path.read_text(encoding="utf-8")
 
 
 def test_add_product_rejects_duplicates(tmp_path: Path) -> None:
