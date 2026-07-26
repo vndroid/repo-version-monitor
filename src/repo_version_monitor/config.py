@@ -83,6 +83,56 @@ def add_product_to_config(
             file.write(f'branch = "{_escape_toml_string(branch)}"\n')
 
 
+def format_config(path: Path, template_path: Path | None = None) -> str:
+    """Ensure the config exists and is normalized. Returns "created" or "formatted".
+
+    - Missing config: copy it from the template (config.example.toml next to it).
+    - Existing config: validate it, then rewrite the [[products]] blocks so each
+      is separated by one blank line and always carries a branch key ("" if unset).
+    """
+    if not path.exists():
+        template = template_path or path.parent / "config.example.toml"
+        if not template.exists():
+            raise FileNotFoundError(f"{path} is missing and template {template} was not found.")
+        path.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
+        return "created"
+
+    # Raises on invalid TOML or invalid product entries.
+    products = load_products(path)
+
+    text = path.read_text(encoding="utf-8")
+    remainder = _strip_product_blocks(text).rstrip("\n")
+
+    blocks = []
+    for product in products:
+        blocks.append(
+            "[[products]]\n"
+            f'name = "{_escape_toml_string(product.name)}"\n'
+            f'repository = "{product.repository}"\n'
+            f'branch = "{_escape_toml_string(product.branch or "")}"\n'
+        )
+
+    parts = [part for part in (remainder, *blocks) if part]
+    path.write_text("\n\n".join(part.rstrip("\n") for part in parts) + "\n", encoding="utf-8")
+    return "formatted"
+
+
+def _strip_product_blocks(text: str) -> str:
+    """Remove every [[products]] block, keeping all other content unchanged."""
+    kept: list[str] = []
+    in_product = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == "[[products]]":
+            in_product = True
+            continue
+        if in_product and stripped.startswith("["):
+            in_product = False
+        if not in_product:
+            kept.append(line)
+    return "\n".join(kept)
+
+
 def load_products(path: Path) -> list[ProductConfig]:
     with path.open("rb") as file:
         raw = tomllib.load(file)
@@ -91,7 +141,8 @@ def load_products(path: Path) -> list[ProductConfig]:
     for item in raw.get("products", []):
         name = item["name"]
         repository = item["repository"]
-        branch = item.get("branch")
+        # An empty branch string means "no branch" (written by `format`).
+        branch = item.get("branch") or None
         validate_product_name(name)
         validate_repository(repository)
         if branch is not None:

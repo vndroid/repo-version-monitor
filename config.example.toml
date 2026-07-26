@@ -7,7 +7,7 @@ token_env = "GITHUB_TOKEN"
 per_page = 10
 
 [mailgun]
-# Set to false to disable email notifications entirely.
+# Set false to disable email notifications entirely.
 # When disabled, no other mailgun settings (including the API key) are required.
 enabled = true
 # Required values. api_key should normally come from MAILGUN_API_KEY.
@@ -25,8 +25,10 @@ notify_on_first_seen = false
 [[products]]
 name = "httpx"
 repository = "encode/httpx"
+branch = ""
 
 [[products]]
 name = "FastAPI"
 repository = "fastapi/fastapi"
+branch = ""
 

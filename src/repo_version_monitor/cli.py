@@ -7,6 +7,7 @@ from pathlib import Path
 
 from repo_version_monitor.config import (
     add_product_to_config,
+    format_config,
     load_config,
     load_products,
     resolve_database_path,
@@ -51,6 +52,11 @@ def main() -> None:
     subparsers.add_parser("list", help="List configured repositories and known latest tags.")
 
     subparsers.add_parser(
+        "format",
+        help="Create config from template if missing; otherwise validate and normalize it.",
+    )
+
+    subparsers.add_parser(
         "resend", help="Resend email for updates whose notification was never sent."
     )
 
@@ -68,6 +74,14 @@ def main() -> None:
         add_product_to_config(args.config, name, args.repository, args.branch)
         suffix = f", branch {args.branch}" if args.branch else ""
         print(f"Added {name} ({args.repository}{suffix}) to {args.config}.")
+        return
+
+    if args.command == "format":
+        action = format_config(args.config)
+        if action == "created":
+            print(f"{args.config} did not exist; created it from the template.")
+        else:
+            print(f"Formatted {args.config}.")
         return
 
     if args.command == "list":

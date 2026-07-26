@@ -25,6 +25,14 @@ export MAILGUN_API_KEY="key-xxx"
 
 ## 使用
 
+整理配置文件：
+
+```bash
+uv run repo-version-monitor --config config.toml format
+```
+
+`format` 会：config.toml 不存在时从同目录的 `config.example.toml` 复制一份；存在时校验格式是否合法，并规范化所有 `[[products]]` 块——块之间保留一个空行，未配置 `branch` 的产品补上 `branch = ""`（空值等同于未配置）。
+
 添加一个公开仓库：
 
 ```bash
