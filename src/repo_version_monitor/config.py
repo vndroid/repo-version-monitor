@@ -20,11 +20,6 @@ class ProductConfig:
     repository: str
     branch: str | None = None
 
-    @property
-    def key(self) -> str:
-        """Unique key used in the database; lets one repo be tracked per branch."""
-        return f"{self.repository}@{self.branch}" if self.branch else self.repository
-
 
 @dataclass(frozen=True)
 class GitHubConfig:

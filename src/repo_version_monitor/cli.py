@@ -23,8 +23,10 @@ from repo_version_monitor.monitor import VersionMonitor
 def _sync_config_hash(config_path: Path) -> list[str]:
     """Record the config hash in the DB; prune stale product data if it changed."""
     store = VersionStore(resolve_database_path(config_path))
-    valid_keys = {product.key for product in load_products(config_path)}
-    removed = store.sync_config_hash(config_file_hash(config_path), valid_keys)
+    valid_products = {
+        (product.repository, product.branch) for product in load_products(config_path)
+    }
+    removed = store.sync_config_hash(config_file_hash(config_path), valid_products)
     for key in removed:
         print(f"Removed stale data for {key} (no longer in config).")
     return removed
@@ -78,8 +80,13 @@ def main() -> None:
         "resend", help="Resend email for updates whose notification was never sent."
     )
 
-    subparsers.add_parser(
+    mailtest_parser = subparsers.add_parser(
         "mailtest", help="Verify mail settings and send a test email via Mailgun."
+    )
+    mailtest_parser.add_argument(
+        "--ignore",
+        action="store_true",
+        help="Ignore mailgun.enabled = false and send the test email anyway.",
     )
 
     run_parser = subparsers.add_parser("run", help="Run checks forever.")
@@ -118,8 +125,8 @@ def main() -> None:
 
         _sync_config_hash(args.config)
         store = VersionStore(resolve_database_path(args.config))
-        stored_by_repository = {
-            product.repository: product
+        stored_by_product = {
+            (product.repository, product.branch): product
             for product in store.list_products()
         }
 
@@ -128,7 +135,7 @@ def main() -> None:
         for index, product in enumerate(
             sorted(products, key=lambda product: product.name.casefold()), start=1
         ):
-            stored = stored_by_repository.get(product.key)
+            stored = stored_by_product.get((product.repository, product.branch))
             latest_tag = stored.latest_tag if stored and stored.latest_tag else "(not checked yet)"
             rows.append(
                 (
@@ -185,8 +192,13 @@ def main() -> None:
     if args.command == "mailtest":
         mg = config.mailgun
         if not mg.enabled:
-            print("Email notifications are disabled (mailgun.enabled = false); enable them first.")
-            return
+            if not args.ignore:
+                print(
+                    "Email notifications are disabled (mailgun.enabled = false); "
+                    "enable them first or pass --ignore."
+                )
+                return
+            print("mailgun.enabled = false ignored (--ignore); proceeding with the test.")
         print("Mailgun configuration:")
         print(f"  domain:   {mg.domain}")
         print(f"  from:     {mg.from_email}")
@@ -200,6 +212,7 @@ def main() -> None:
                 ("mailgun.domain", mg.domain),
                 ("mailgun.from_email", mg.from_email),
                 ("mailgun.to_emails", mg.to_emails),
+                ("mailgun.api_key", mg.api_key),
             )
             if not value
         ]

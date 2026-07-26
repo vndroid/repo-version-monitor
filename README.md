@@ -63,6 +63,12 @@ uv run repo-version-monitor --config config.toml list
 uv run repo-version-monitor --config config.toml mailtest
 ```
 
+若配置中 `mailgun.enabled = false`，可加 `--ignore` 忽略开关继续测试：
+
+```bash
+uv run repo-version-monitor --config config.toml mailtest --ignore
+```
+
 单次检查：
 
 ```bash

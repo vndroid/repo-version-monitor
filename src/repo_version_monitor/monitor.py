@@ -30,7 +30,7 @@ class VersionMonitor:
         self.store.initialize()
         removed = self.store.sync_config_hash(
             config_file_hash(self.config.source_path),
-            {product.key for product in self.config.products},
+            {(product.repository, product.branch) for product in self.config.products},
         )
         for key in removed:
             logger.info("Removed stale data for %s (no longer in config).", key)
@@ -39,50 +39,51 @@ class VersionMonitor:
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             for product in self.config.products:
-                key = product.key
+                repo, branch = product.repository, product.branch
+                label = f"{repo}@{branch}" if branch else repo
                 # One failing repository must not abort checks for the rest.
                 try:
-                    if product.branch:
-                        tags = await self.github.fetch_all_tags(client, product.repository)
-                        tags = filter_tags_for_branch(tags, product.branch)
+                    if branch:
+                        tags = await self.github.fetch_all_tags(client, repo)
+                        tags = filter_tags_for_branch(tags, branch)
                     else:
-                        tags = await self.github.fetch_tags(client, product.repository)
+                        tags = await self.github.fetch_tags(client, repo)
                 except httpx.HTTPError:
-                    logger.exception("Failed to fetch tags for %s", key)
+                    logger.exception("Failed to fetch tags for %s", label)
                     continue
 
                 if not tags:
-                    logger.warning("No tags found for %s", key)
+                    logger.warning("No tags found for %s", label)
                     continue
 
                 latest_tag = tags[0].name
-                stored = self.store.get_product(key)
+                stored = self.store.get_product(repo, branch)
 
                 if stored is None:
                     # Persist immediately so a later mail failure never causes
                     # duplicate events for the same tag on the next cycle.
-                    self.store.upsert_product(product.name, key, latest_tag)
+                    self.store.upsert_product(product.name, repo, latest_tag, branch)
                     if self.config.monitor.notify_on_first_seen:
-                        event_ids.append(self.store.record_event(key, None, latest_tag))
-                        updates.append(VersionUpdate(product.name, key, None, latest_tag))
-                    logger.info("Initialized %s at %s", key, latest_tag)
+                        event_ids.append(self.store.record_event(repo, None, latest_tag, branch))
+                        updates.append(VersionUpdate(product.name, repo, None, latest_tag))
+                    logger.info("Initialized %s at %s", label, latest_tag)
                 elif stored.latest_tag != latest_tag:
-                    self.store.upsert_product(product.name, key, latest_tag)
+                    self.store.upsert_product(product.name, repo, latest_tag, branch)
                     event_ids.append(
-                        self.store.record_event(key, stored.latest_tag, latest_tag)
+                        self.store.record_event(repo, stored.latest_tag, latest_tag, branch)
                     )
                     updates.append(
-                        VersionUpdate(product.name, key, stored.latest_tag, latest_tag)
+                        VersionUpdate(product.name, repo, stored.latest_tag, latest_tag)
                     )
                     logger.info(
                         "Detected update for %s: %s -> %s",
-                        key,
+                        label,
                         stored.latest_tag,
                         latest_tag,
                     )
                 else:
-                    self.store.upsert_product(product.name, key, latest_tag)
-                    logger.info("%s is unchanged at %s", key, latest_tag)
+                    self.store.upsert_product(product.name, repo, latest_tag, branch)
+                    logger.info("%s is unchanged at %s", label, latest_tag)
 
             if updates:
                 if self.config.mailgun.enabled:

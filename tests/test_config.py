@@ -51,7 +51,6 @@ def test_add_product_with_branch(tmp_path: Path) -> None:
     products = load_products(config_path)
 
     assert products[0].branch == "v13"
-    assert products[0].key == "postgres/postgres@v13"
 
 
 def test_same_repo_allowed_with_different_branch(tmp_path: Path) -> None:
