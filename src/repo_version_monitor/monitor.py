@@ -7,7 +7,7 @@ import httpx
 
 from repo_version_monitor.config import AppConfig
 from repo_version_monitor.db import VersionStore
-from repo_version_monitor.github import GitHubClient
+from repo_version_monitor.github import GitHubClient, filter_tags_for_branch
 from repo_version_monitor.mailgun import MailgunClient, VersionUpdate
 
 logger = logging.getLogger(__name__)
@@ -33,49 +33,50 @@ class VersionMonitor:
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             for product in self.config.products:
+                key = product.key
                 # One failing repository must not abort checks for the rest.
                 try:
-                    tags = await self.github.fetch_tags(client, product.repository)
+                    if product.branch:
+                        tags = await self.github.fetch_all_tags(client, product.repository)
+                        tags = filter_tags_for_branch(tags, product.branch)
+                    else:
+                        tags = await self.github.fetch_tags(client, product.repository)
                 except httpx.HTTPError:
-                    logger.exception("Failed to fetch tags for %s", product.repository)
+                    logger.exception("Failed to fetch tags for %s", key)
                     continue
 
                 if not tags:
-                    logger.warning("No tags found for %s", product.repository)
+                    logger.warning("No tags found for %s", key)
                     continue
 
                 latest_tag = tags[0].name
-                stored = self.store.get_product(product.repository)
+                stored = self.store.get_product(key)
 
                 if stored is None:
                     # Persist immediately so a later mail failure never causes
                     # duplicate events for the same tag on the next cycle.
-                    self.store.upsert_product(product.name, product.repository, latest_tag)
+                    self.store.upsert_product(product.name, key, latest_tag)
                     if self.config.monitor.notify_on_first_seen:
-                        event_ids.append(
-                            self.store.record_event(product.repository, None, latest_tag)
-                        )
-                        updates.append(
-                            VersionUpdate(product.name, product.repository, None, latest_tag)
-                        )
-                    logger.info("Initialized %s at %s", product.repository, latest_tag)
+                        event_ids.append(self.store.record_event(key, None, latest_tag))
+                        updates.append(VersionUpdate(product.name, key, None, latest_tag))
+                    logger.info("Initialized %s at %s", key, latest_tag)
                 elif stored.latest_tag != latest_tag:
-                    self.store.upsert_product(product.name, product.repository, latest_tag)
+                    self.store.upsert_product(product.name, key, latest_tag)
                     event_ids.append(
-                        self.store.record_event(product.repository, stored.latest_tag, latest_tag)
+                        self.store.record_event(key, stored.latest_tag, latest_tag)
                     )
                     updates.append(
-                        VersionUpdate(product.name, product.repository, stored.latest_tag, latest_tag)
+                        VersionUpdate(product.name, key, stored.latest_tag, latest_tag)
                     )
                     logger.info(
                         "Detected update for %s: %s -> %s",
-                        product.repository,
+                        key,
                         stored.latest_tag,
                         latest_tag,
                     )
                 else:
-                    self.store.upsert_product(product.name, product.repository, latest_tag)
-                    logger.info("%s is unchanged at %s", product.repository, latest_tag)
+                    self.store.upsert_product(product.name, key, latest_tag)
+                    logger.info("%s is unchanged at %s", key, latest_tag)
 
             if updates:
                 if self.config.mailgun.enabled:

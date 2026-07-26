@@ -43,6 +43,10 @@ def main() -> None:
     add_parser = subparsers.add_parser("add", help="Add a GitHub repository to the config.")
     add_parser.add_argument("repository", help="GitHub repository in owner/name format.")
     add_parser.add_argument("--name", help="Display name. Defaults to the repository name.")
+    add_parser.add_argument(
+        "--branch",
+        help="Track a branch line, e.g. v13: only tags starting with 'v13' or '13' are considered.",
+    )
 
     subparsers.add_parser("list", help="List configured repositories and known latest tags.")
 
@@ -61,8 +65,9 @@ def main() -> None:
 
     if args.command == "add":
         name = args.name or args.repository.rsplit("/", 1)[-1]
-        add_product_to_config(args.config, name, args.repository)
-        print(f"Added {name} ({args.repository}) to {args.config}.")
+        add_product_to_config(args.config, name, args.repository, args.branch)
+        suffix = f", branch {args.branch}" if args.branch else ""
+        print(f"Added {name} ({args.repository}{suffix}) to {args.config}.")
         return
 
     if args.command == "list":
@@ -82,11 +87,19 @@ def main() -> None:
         for index, product in enumerate(
             sorted(products, key=lambda product: product.name.casefold()), start=1
         ):
-            stored = stored_by_repository.get(product.repository)
+            stored = stored_by_repository.get(product.key)
             latest_tag = stored.latest_tag if stored and stored.latest_tag else "(not checked yet)"
-            rows.append((str(index).zfill(id_width), product.name, product.repository, latest_tag))
+            rows.append(
+                (
+                    str(index).zfill(id_width),
+                    product.name,
+                    product.repository,
+                    product.branch or "-",
+                    latest_tag,
+                )
+            )
 
-        for line in _render_table(("ID", "NAME", "REPOSITORY", "LATEST TAG"), rows):
+        for line in _render_table(("ID", "NAME", "REPOSITORY", "BRANCH", "LATEST TAG"), rows):
             print(line)
         return
 

@@ -31,6 +31,14 @@ export MAILGUN_API_KEY="key-xxx"
 uv run repo-version-monitor --config config.toml add encode/httpx --name httpx
 ```
 
+追踪某个特定分支线（如 PostgreSQL 13）：
+
+```bash
+uv run repo-version-monitor --config config.toml add postgres/postgres --name pg13 --branch v13
+```
+
+指定 `--branch v13` 后，会获取该仓库所有标签，只保留以 `v13` 或 `13` 开头的标签，并记录其中最新的一个。同一仓库可以用不同 `--branch` 添加多次。
+
 查看当前监控的仓库：
 
 ```bash

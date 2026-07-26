@@ -14,6 +14,12 @@ _PRODUCT_NAME_PATTERN = re.compile(r"[A-Za-z0-9_.-]+")
 class ProductConfig:
     name: str
     repository: str
+    branch: str | None = None
+
+    @property
+    def key(self) -> str:
+        """Unique key used in the database; lets one repo be tracked per branch."""
+        return f"{self.repository}@{self.branch}" if self.branch else self.repository
 
 
 @dataclass(frozen=True)
@@ -52,12 +58,19 @@ class AppConfig:
     products: list[ProductConfig]
 
 
-def add_product_to_config(path: Path, name: str, repository: str) -> None:
+def add_product_to_config(
+    path: Path, name: str, repository: str, branch: str | None = None
+) -> None:
     validate_product_name(name)
     validate_repository(repository)
+    if branch is not None:
+        validate_branch(branch)
     products = load_products(path)
-    if any(product.repository == repository for product in products):
-        raise ValueError(f"{repository} is already configured.")
+    if any(
+        product.repository == repository and product.branch == branch for product in products
+    ):
+        label = f"{repository} (branch {branch})" if branch else repository
+        raise ValueError(f"{label} is already configured.")
 
     with path.open("a", encoding="utf-8") as file:
         file.write(
@@ -66,6 +79,8 @@ def add_product_to_config(path: Path, name: str, repository: str) -> None:
             f'name = "{_escape_toml_string(name)}"\n'
             f'repository = "{repository}"\n'
         )
+        if branch:
+            file.write(f'branch = "{_escape_toml_string(branch)}"\n')
 
 
 def load_products(path: Path) -> list[ProductConfig]:
@@ -76,9 +91,12 @@ def load_products(path: Path) -> list[ProductConfig]:
     for item in raw.get("products", []):
         name = item["name"]
         repository = item["repository"]
+        branch = item.get("branch")
         validate_product_name(name)
         validate_repository(repository)
-        products.append(ProductConfig(name=name, repository=repository))
+        if branch is not None:
+            validate_branch(branch)
+        products.append(ProductConfig(name=name, repository=repository, branch=branch))
     return products
 
 
@@ -147,6 +165,14 @@ def validate_product_name(name: str) -> None:
     if not _PRODUCT_NAME_PATTERN.fullmatch(name):
         raise ValueError(
             f"Invalid product name {name!r}: only letters (A-Z, a-z), digits, "
+            "'-', '_' and '.' are allowed."
+        )
+
+
+def validate_branch(branch: str) -> None:
+    if not _PRODUCT_NAME_PATTERN.fullmatch(branch):
+        raise ValueError(
+            f"Invalid branch {branch!r}: only letters (A-Z, a-z), digits, "
             "'-', '_' and '.' are allowed."
         )
 

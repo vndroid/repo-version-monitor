@@ -38,6 +38,29 @@ repository = "encode/httpx"
         add_product_to_config(config_path, "HTTPX", "encode/httpx")
 
 
+def test_add_product_with_branch(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    add_product_to_config(config_path, "postgres", "postgres/postgres", branch="v13")
+    products = load_products(config_path)
+
+    assert products[0].branch == "v13"
+    assert products[0].key == "postgres/postgres@v13"
+
+
+def test_same_repo_allowed_with_different_branch(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    add_product_to_config(config_path, "pg", "postgres/postgres")
+    add_product_to_config(config_path, "pg13", "postgres/postgres", branch="v13")
+    with pytest.raises(ValueError, match="already configured"):
+        add_product_to_config(config_path, "pg13-dup", "postgres/postgres", branch="v13")
+
+    assert len(load_products(config_path)) == 2
+
+
 @pytest.mark.parametrize("name", ["监控工具", "bad name", "name!", ""])
 def test_add_product_rejects_invalid_name(tmp_path: Path, name: str) -> None:
     config_path = tmp_path / "config.toml"

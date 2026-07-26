@@ -42,7 +42,7 @@ repository = "fastapi/fastapi"
     main()
 
     lines = capsys.readouterr().out.splitlines()
-    assert lines[0].split() == ["ID", "NAME", "REPOSITORY", "LATEST", "TAG"]
+    assert lines[0].split() == ["ID", "NAME", "REPOSITORY", "BRANCH", "LATEST", "TAG"]
     # case-insensitive sort by name: FastAPI before zlib, ids zero-padded from 01
-    assert lines[1].split()[:3] == ["01", "FastAPI", "fastapi/fastapi"]
-    assert lines[2].split()[:3] == ["02", "zlib", "madler/zlib"]
+    assert lines[1].split()[:4] == ["01", "FastAPI", "fastapi/fastapi", "-"]
+    assert lines[2].split()[:4] == ["02", "zlib", "madler/zlib", "-"]
