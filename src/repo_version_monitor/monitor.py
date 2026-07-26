@@ -7,7 +7,11 @@ import httpx
 
 from repo_version_monitor.config import AppConfig, config_file_hash
 from repo_version_monitor.db import VersionStore
-from repo_version_monitor.github import GitHubClient, filter_tags_for_branch
+from repo_version_monitor.github import (
+    GitHubClient,
+    filter_tags_for_branch,
+    pick_latest_version_tag,
+)
 from repo_version_monitor.mailgun import MailgunClient, VersionUpdate
 
 logger = logging.getLogger(__name__)
@@ -43,20 +47,26 @@ class VersionMonitor:
                 label = f"{repo}@{branch}" if branch else repo
                 # One failing repository must not abort checks for the rest.
                 try:
-                    if branch:
-                        tags = await self.github.fetch_all_tags(client, repo)
-                        tags = filter_tags_for_branch(tags, branch)
-                    else:
-                        tags = await self.github.fetch_tags(client, repo)
+                    tags = await self.github.fetch_all_tags(client, repo)
                 except httpx.HTTPError:
                     logger.exception("Failed to fetch tags for %s", label)
                     continue
+                if branch:
+                    tags = filter_tags_for_branch(tags, branch)
 
                 if not tags:
                     logger.warning("No tags found for %s", label)
                     continue
 
-                latest_tag = tags[0].name
+                # The API's list order is unreliable; pick the highest version tag.
+                latest = pick_latest_version_tag(tags)
+                if latest is None:
+                    logger.warning(
+                        "No version-like tags for %s; falling back to the first listed tag.",
+                        label,
+                    )
+                    latest = tags[0]
+                latest_tag = latest.name
                 stored = self.store.get_product(repo, branch)
 
                 if stored is None:

@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 import httpx
+
+# v1.2.3 or 1.2.3 style tags; excludes prereleases and non-version tags
+# like "flash-with-wbuf-stack" or "with-deprecated-diskstore".
+_VERSION_TAG_PATTERN = re.compile(r"^v?(\d+(?:\.\d+)*)$")
 
 
 @dataclass(frozen=True)
@@ -51,6 +56,24 @@ class GitHubClient:
             GitHubTag(name=item["name"], commit_sha=item["commit"]["sha"])
             for item in response.json()
         ]
+
+
+def pick_latest_version_tag(tags: list[GitHubTag]) -> GitHubTag | None:
+    """Pick the highest version-like tag by numeric comparison.
+
+    The GitHub tags API is not sorted by recency, and repositories may carry
+    non-version tags; relying on list order picks the wrong tag.
+    Returns None when no tag looks like a version.
+    """
+    best: tuple[tuple[int, ...], GitHubTag] | None = None
+    for tag in tags:
+        match = _VERSION_TAG_PATTERN.match(tag.name)
+        if not match:
+            continue
+        version = tuple(int(part) for part in match.group(1).split("."))
+        if best is None or version > best[0]:
+            best = (version, tag)
+    return best[1] if best else None
 
 
 def filter_tags_for_branch(tags: list[GitHubTag], branch: str) -> list[GitHubTag]:
