@@ -9,6 +9,7 @@ from repo_version_monitor.config import AppConfig, config_file_hash
 from repo_version_monitor.db import VersionStore
 from repo_version_monitor.github import (
     GitHubClient,
+    GitHubGraphQLError,
     filter_tags_for_branch,
     pick_latest_version_tag,
 )
@@ -45,9 +46,11 @@ class VersionMonitor:
             for product in self.config.products:
                 repo, branch = product.repository, product.branch
                 label = f"{repo}@{branch}" if branch else repo
+                # Tiered fetch: GraphQL (date-ordered) when a token is configured,
+                # falling back to the REST tags endpoint otherwise or on failure.
                 # One failing repository must not abort checks for the rest.
                 try:
-                    tags = await self.github.fetch_all_tags(client, repo)
+                    tags = await self._fetch_tags(client, repo, label)
                 except httpx.HTTPError:
                     logger.exception("Failed to fetch tags for %s", label)
                     continue
@@ -108,6 +111,18 @@ class VersionMonitor:
                     )
 
         return updates
+
+    async def _fetch_tags(self, client: httpx.AsyncClient, repo: str, label: str) -> list:
+        if self.github.token:
+            try:
+                return await self.github.fetch_all_tags_graphql(client, repo)
+            except (httpx.HTTPError, GitHubGraphQLError):
+                logger.warning(
+                    "GraphQL tag fetch failed for %s; falling back to REST.",
+                    label,
+                    exc_info=True,
+                )
+        return await self.github.fetch_all_tags(client, repo)
 
     async def resend_unnotified(self) -> list[VersionUpdate]:
         """Resend email for recorded events whose notification never went out."""

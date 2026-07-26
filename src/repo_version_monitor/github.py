@@ -16,6 +16,31 @@ class GitHubTag:
     commit_sha: str
 
 
+class GitHubGraphQLError(RuntimeError):
+    """GraphQL request failed or returned errors; callers may fall back to REST."""
+
+
+# Tags ordered by the underlying commit date (newest first) — the REST tags
+# endpoint offers no time-based ordering at all.
+_TAGS_QUERY = """
+query($owner: String!, $name: String!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    refs(refPrefix: "refs/tags/", first: 100, after: $cursor,
+         orderBy: {field: TAG_COMMIT_DATE, direction: DESC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        name
+        target {
+          oid
+          ... on Tag { target { oid } }
+        }
+      }
+    }
+  }
+}
+"""
+
+
 class GitHubClient:
     def __init__(self, token: str | None = None, per_page: int = 10) -> None:
         self.token = token
@@ -34,6 +59,49 @@ class GitHubClient:
             if len(batch) < 100:
                 return tags
             page += 1
+
+    async def fetch_all_tags_graphql(
+        self, client: httpx.AsyncClient, repository: str
+    ) -> list[GitHubTag]:
+        """Fetch every tag via GraphQL, ordered by tag commit date (newest first)."""
+        if not self.token:
+            raise GitHubGraphQLError("GraphQL requires a token.")
+
+        owner, _, name = repository.partition("/")
+        tags: list[GitHubTag] = []
+        cursor: str | None = None
+        while True:
+            response = await client.post(
+                "https://api.github.com/graphql",
+                headers={
+                    "Authorization": f"Bearer {self.token}",
+                    "User-Agent": "repo-version-monitor/0.1.0",
+                },
+                json={
+                    "query": _TAGS_QUERY,
+                    "variables": {"owner": owner, "name": name, "cursor": cursor},
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("errors"):
+                raise GitHubGraphQLError(str(payload["errors"]))
+            repo_data = payload.get("data", {}).get("repository")
+            if repo_data is None:
+                raise GitHubGraphQLError(f"Repository {repository} not found via GraphQL.")
+
+            refs = repo_data["refs"]
+            for node in refs["nodes"]:
+                target = node.get("target") or {}
+                # Annotated tags nest the commit one level deeper.
+                nested = target.get("target") or {}
+                sha = nested.get("oid") or target.get("oid") or ""
+                tags.append(GitHubTag(name=node["name"], commit_sha=sha))
+
+            page_info = refs["pageInfo"]
+            if not page_info["hasNextPage"]:
+                return tags
+            cursor = page_info["endCursor"]
 
     async def _fetch_page(
         self, client: httpx.AsyncClient, repository: str, per_page: int, page: int

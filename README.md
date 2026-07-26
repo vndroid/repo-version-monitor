@@ -27,6 +27,8 @@ export MAILGUN_API_KEY="key-xxx"
 
 密钥读取优先级（GitHub token 与 Mailgun API key 一致）：先读环境变量（变量名分别由 `token_env`、`api_key_env` 指定，默认 `GITHUB_TOKEN`、`MAILGUN_API_KEY`），不存在时回退到配置文件中的 `token` / `api_key` 字段。推荐使用环境变量，内联字段仅作为本地调试的便捷方式，注意不要将含密钥的配置文件提交到版本库。执行 `check` 时会输出密钥的实际来源（环境变量还是配置文件）。
 
+获取 tag 采用分层策略：配置了 GitHub token 时走 GraphQL API（按 tag 提交时间倒序拉取全量）；未配置 token 或 GraphQL 失败时回退到 REST tags 接口（该接口无时间排序，程序会筛选版本号形态的 tag 并按数值取最大）。
+
 ## 使用
 
 整理配置文件：

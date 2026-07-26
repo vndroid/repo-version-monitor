@@ -1,8 +1,49 @@
+import asyncio
+
+import pytest
+
 from repo_version_monitor.github import (
+    GitHubClient,
+    GitHubGraphQLError,
     GitHubTag,
     filter_tags_for_branch,
     pick_latest_version_tag,
 )
+
+
+class _FakeResponse:
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        pass
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class _FakeGraphQLClient:
+    def __init__(self, pages: list[dict]) -> None:
+        self.pages = pages
+        self.calls = 0
+
+    async def post(self, url, **kwargs):
+        payload = self.pages[self.calls]
+        self.calls += 1
+        return _FakeResponse(payload)
+
+
+def _refs_page(nodes: list[dict], has_next: bool = False, cursor: str | None = None) -> dict:
+    return {
+        "data": {
+            "repository": {
+                "refs": {
+                    "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
+                    "nodes": nodes,
+                }
+            }
+        }
+    }
 
 
 def _tags(*names: str) -> list[GitHubTag]:
@@ -60,3 +101,43 @@ def test_pick_handles_v_prefix_and_ignores_prereleases() -> None:
 
 def test_pick_returns_none_without_version_tags() -> None:
     assert pick_latest_version_tag(_tags("foo", "bar-baz")) is None
+
+
+def test_graphql_fetch_paginates_and_parses_annotated_tags() -> None:
+    github = GitHubClient(token="t")
+    client = _FakeGraphQLClient(
+        [
+            _refs_page(
+                [
+                    # Lightweight tag: commit oid directly on target.
+                    {"name": "8.2.1", "target": {"oid": "sha-light"}},
+                    # Annotated tag: commit nested one level deeper.
+                    {"name": "8.2.0", "target": {"oid": "tag-obj", "target": {"oid": "sha-annotated"}}},
+                ],
+                has_next=True,
+                cursor="c1",
+            ),
+            _refs_page([{"name": "8.1.0", "target": {"oid": "sha-old"}}]),
+        ]
+    )
+
+    tags = asyncio.run(github.fetch_all_tags_graphql(client, "redis/redis"))
+
+    assert client.calls == 2
+    assert [tag.name for tag in tags] == ["8.2.1", "8.2.0", "8.1.0"]
+    assert tags[1].commit_sha == "sha-annotated"
+
+
+def test_graphql_requires_token() -> None:
+    github = GitHubClient(token=None)
+
+    with pytest.raises(GitHubGraphQLError):
+        asyncio.run(github.fetch_all_tags_graphql(_FakeGraphQLClient([]), "redis/redis"))
+
+
+def test_graphql_errors_raise() -> None:
+    github = GitHubClient(token="t")
+    client = _FakeGraphQLClient([{"errors": [{"message": "boom"}]}])
+
+    with pytest.raises(GitHubGraphQLError):
+        asyncio.run(github.fetch_all_tags_graphql(client, "redis/redis"))
