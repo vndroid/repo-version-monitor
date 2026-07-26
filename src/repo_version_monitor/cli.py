@@ -69,7 +69,20 @@ def main() -> None:
         help="Track a branch line, e.g. v13: only tags starting with 'v13' or '13' are considered.",
     )
 
-    subparsers.add_parser("list", help="List configured repositories and known latest tags.")
+    list_parser = subparsers.add_parser(
+        "list", help="List configured repositories and known latest tags."
+    )
+    sort_group = list_parser.add_mutually_exclusive_group()
+    sort_group.add_argument(
+        "--sort-by-name",
+        action="store_true",
+        help="Sort by product name, case-insensitive (default).",
+    )
+    sort_group.add_argument(
+        "--sort-by-repository",
+        action="store_true",
+        help="Sort by repository (then branch), case-insensitive.",
+    )
 
     subparsers.add_parser(
         "format",
@@ -130,11 +143,16 @@ def main() -> None:
             for product in store.list_products()
         }
 
+        if args.sort_by_repository:
+            def sort_key(product):
+                return (product.repository.casefold(), product.branch or "")
+        else:  # default: --sort-by-name
+            def sort_key(product):
+                return product.name.casefold()
+
         id_width = 3 if len(products) >= 100 else 2
         rows = []
-        for index, product in enumerate(
-            sorted(products, key=lambda product: product.name.casefold()), start=1
-        ):
+        for index, product in enumerate(sorted(products, key=sort_key), start=1):
             stored = stored_by_product.get((product.repository, product.branch))
             latest_tag = stored.latest_tag if stored and stored.latest_tag else "(not checked yet)"
             rows.append(

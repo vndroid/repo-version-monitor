@@ -57,6 +57,8 @@ uv run repo-version-monitor --config config.toml add postgres/postgres --name pg
 uv run repo-version-monitor --config config.toml list
 ```
 
+默认按产品 name 排序（不区分大小写，等同 `--sort-by-name`）；加 `--sort-by-repository` 可改为按 repository（次级按 branch）排序，两个参数互斥。
+
 发送测试邮件（检查邮件配置并跟踪发送结果）：
 
 ```bash

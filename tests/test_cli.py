@@ -46,3 +46,31 @@ repository = "fastapi/fastapi"
     # case-insensitive sort by name: FastAPI before zlib, ids zero-padded from 01
     assert lines[1].split()[:4] == ["01", "FastAPI", "fastapi/fastapi", "-"]
     assert lines[2].split()[:4] == ["02", "zlib", "madler/zlib", "-"]
+
+
+def test_list_sort_by_repository(tmp_path: Path, capsys, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[[products]]
+name = "abc"
+repository = "zzz/last"
+
+[[products]]
+name = "zzz"
+repository = "Aaa/first"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["repo-version-monitor", "--config", str(config_path), "list", "--sort-by-repository"],
+    )
+
+    main()
+
+    lines = capsys.readouterr().out.splitlines()
+    # case-insensitive sort by repository, not by name
+    assert lines[1].split()[:3] == ["01", "zzz", "Aaa/first"]
+    assert lines[2].split()[:3] == ["02", "abc", "zzz/last"]
