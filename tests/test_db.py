@@ -60,3 +60,40 @@ def test_list_unnotified_events_without_db_file(tmp_path) -> None:
     store = VersionStore(tmp_path / "missing.sqlite3")
 
     assert store.list_unnotified_events() == []
+
+
+def test_sync_config_hash_first_time_records_without_pruning(tmp_path) -> None:
+    store = VersionStore(tmp_path / "versions.sqlite3")
+    store.initialize()
+    store.upsert_product("old", "gone/gone", "1.0")
+
+    removed = store.sync_config_hash("hash-1", {"encode/httpx"})
+
+    assert removed == []
+    assert store.get_meta("config_hash") == "hash-1"
+    assert store.get_product("gone/gone") is not None
+
+
+def test_sync_config_hash_unchanged_is_noop(tmp_path) -> None:
+    store = VersionStore(tmp_path / "versions.sqlite3")
+    store.sync_config_hash("hash-1", {"a/a"})
+    store.upsert_product("old", "gone/gone", "1.0")
+
+    assert store.sync_config_hash("hash-1", {"a/a"}) == []
+    assert store.get_product("gone/gone") is not None
+
+
+def test_sync_config_hash_change_prunes_stale_products(tmp_path) -> None:
+    store = VersionStore(tmp_path / "versions.sqlite3")
+    store.sync_config_hash("hash-1", {"encode/httpx", "gone/gone"})
+    store.upsert_product("httpx", "encode/httpx", "0.28.0")
+    store.upsert_product("old", "gone/gone", "1.0")
+    store.record_event("gone/gone", None, "1.0")
+
+    removed = store.sync_config_hash("hash-2", {"encode/httpx"})
+
+    assert removed == ["gone/gone"]
+    assert store.get_product("gone/gone") is None
+    assert store.get_product("encode/httpx") is not None
+    assert store.list_unnotified_events() == []
+    assert store.get_meta("config_hash") == "hash-2"

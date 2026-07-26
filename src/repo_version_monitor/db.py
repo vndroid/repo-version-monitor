@@ -48,6 +48,11 @@ class VersionStore:
                     notified_at TEXT,
                     FOREIGN KEY(repository) REFERENCES products(repository)
                 );
+
+                CREATE TABLE IF NOT EXISTS meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 """
             )
 
@@ -135,6 +140,52 @@ class VersionStore:
                 "UPDATE tag_events SET notified_at = ? WHERE id = ?",
                 (_now(), event_id),
             )
+
+    def sync_config_hash(self, config_hash: str, valid_keys: set[str]) -> list[str]:
+        """Record the config hash; on change, drop data for products no longer configured.
+
+        Returns the keys removed from the database.
+        """
+        self.initialize()
+        stored = self.get_meta("config_hash")
+        if stored == config_hash:
+            return []
+
+        removed = [] if stored is None else self.prune_products_not_in(valid_keys)
+        self.set_meta("config_hash", config_hash)
+        return removed
+
+    def get_meta(self, key: str) -> str | None:
+        if not self.path.exists():
+            return None
+        with closing(self._connect()) as connection:
+            try:
+                row = connection.execute(
+                    "SELECT value FROM meta WHERE key = ?", (key,)
+                ).fetchone()
+            except sqlite3.OperationalError:  # meta table absent in pre-existing DBs
+                return None
+        return row["value"] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        with closing(self._connect()) as connection, connection:
+            connection.execute(
+                """
+                INSERT INTO meta (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (key, value),
+            )
+
+    def prune_products_not_in(self, valid_keys: set[str]) -> list[str]:
+        """Delete products (and their tag events) whose key is not configured anymore."""
+        with closing(self._connect()) as connection, connection:
+            rows = connection.execute("SELECT repository FROM products").fetchall()
+            removed = [row["repository"] for row in rows if row["repository"] not in valid_keys]
+            for key in removed:
+                connection.execute("DELETE FROM tag_events WHERE repository = ?", (key,))
+                connection.execute("DELETE FROM products WHERE repository = ?", (key,))
+        return removed
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path)

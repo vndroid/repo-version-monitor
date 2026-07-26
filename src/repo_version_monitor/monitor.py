@@ -5,7 +5,7 @@ import logging
 
 import httpx
 
-from repo_version_monitor.config import AppConfig
+from repo_version_monitor.config import AppConfig, config_file_hash
 from repo_version_monitor.db import VersionStore
 from repo_version_monitor.github import GitHubClient, filter_tags_for_branch
 from repo_version_monitor.mailgun import MailgunClient, VersionUpdate
@@ -28,6 +28,12 @@ class VersionMonitor:
 
     async def check_once(self) -> list[VersionUpdate]:
         self.store.initialize()
+        removed = self.store.sync_config_hash(
+            config_file_hash(self.config.source_path),
+            {product.key for product in self.config.products},
+        )
+        for key in removed:
+            logger.info("Removed stale data for %s (no longer in config).", key)
         updates: list[VersionUpdate] = []
         event_ids: list[int] = []
 

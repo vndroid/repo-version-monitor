@@ -7,6 +7,7 @@ from pathlib import Path
 
 from repo_version_monitor.config import (
     add_product_to_config,
+    config_file_hash,
     format_config,
     load_config,
     load_products,
@@ -14,6 +15,16 @@ from repo_version_monitor.config import (
 )
 from repo_version_monitor.db import VersionStore
 from repo_version_monitor.monitor import VersionMonitor
+
+
+def _sync_config_hash(config_path: Path) -> list[str]:
+    """Record the config hash in the DB; prune stale product data if it changed."""
+    store = VersionStore(resolve_database_path(config_path))
+    valid_keys = {product.key for product in load_products(config_path)}
+    removed = store.sync_config_hash(config_file_hash(config_path), valid_keys)
+    for key in removed:
+        print(f"Removed stale data for {key} (no longer in config).")
+    return removed
 
 
 def _render_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> list[str]:
@@ -74,6 +85,7 @@ def main() -> None:
         add_product_to_config(args.config, name, args.repository, args.branch)
         suffix = f", branch {args.branch}" if args.branch else ""
         print(f"Added {name} ({args.repository}{suffix}) to {args.config}.")
+        _sync_config_hash(args.config)
         return
 
     if args.command == "format":
@@ -82,6 +94,7 @@ def main() -> None:
             print(f"{args.config} did not exist; created it from the template.")
         else:
             print(f"Formatted {args.config}.")
+        _sync_config_hash(args.config)
         return
 
     if args.command == "list":
@@ -90,6 +103,7 @@ def main() -> None:
             print("No repositories configured.")
             return
 
+        _sync_config_hash(args.config)
         store = VersionStore(resolve_database_path(args.config))
         stored_by_repository = {
             product.repository: product

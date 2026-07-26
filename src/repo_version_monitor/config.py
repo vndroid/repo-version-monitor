@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -56,6 +57,11 @@ class AppConfig:
     mailgun: MailgunConfig
     monitor: MonitorConfig
     products: list[ProductConfig]
+    source_path: Path
+
+
+def config_file_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def add_product_to_config(
@@ -209,6 +215,7 @@ def load_config(path: Path) -> AppConfig:
             notify_on_first_seen=bool(monitor_raw.get("notify_on_first_seen", False)),
         ),
         products=products,
+        source_path=path,
     )
 
 

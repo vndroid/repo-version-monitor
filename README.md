@@ -81,6 +81,10 @@ pytest 在 `dev` 可选依赖中，运行测试需带上 extra：
 uv run --extra dev pytest tests/ -q
 ```
 
+## 配置变更自动清理
+
+修改配置的命令（`add`、`format`）会把 config.toml 的 SHA-256 哈希记录到数据库；`check`、`list`、`run` 执行时对比该哈希，若不存在则创建，若发现配置文件已变化，会自动清理数据库中失效的数据——例如某产品已从配置移除，其 `products` 记录和相关 `tag_events` 会被一并删除。
+
 ## 关闭邮件通知
 
 把配置中的 `[mailgun]` 段的 `enabled` 改成 `false` 即可关闭邮件通知（默认为 `true`）。关闭后：
