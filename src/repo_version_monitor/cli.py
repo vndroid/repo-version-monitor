@@ -142,6 +142,9 @@ def main() -> None:
     monitor = VersionMonitor(config)
 
     if args.command == "check":
+        print(f"GitHub token: {config.github.token_source or 'not set (unauthenticated)'}")
+        if config.mailgun.enabled:
+            print(f"Mailgun API key: {config.mailgun.api_key_source or 'not set'}")
         show_progress = args.log_level is None
         dots_printed = 0
 

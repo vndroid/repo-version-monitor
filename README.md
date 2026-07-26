@@ -23,6 +23,8 @@ export GITHUB_TOKEN="github_pat_xxx"       # 可选，但建议设置，避免 G
 export MAILGUN_API_KEY="key-xxx"
 ```
 
+密钥读取优先级（GitHub token 与 Mailgun API key 一致）：先读环境变量（变量名分别由 `token_env`、`api_key_env` 指定，默认 `GITHUB_TOKEN`、`MAILGUN_API_KEY`），不存在时回退到配置文件中的 `token` / `api_key` 字段。推荐使用环境变量，内联字段仅作为本地调试的便捷方式，注意不要将含密钥的配置文件提交到版本库。执行 `check` 时会输出密钥的实际来源（环境变量还是配置文件）。
+
 ## 使用
 
 整理配置文件：

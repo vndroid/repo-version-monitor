@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import hashlib
+import logging
 import os
 from pathlib import Path
 import re
 import tomllib
+
+logger = logging.getLogger(__name__)
 
 _REPOSITORY_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _PRODUCT_NAME_PATTERN = re.compile(r"[A-Za-z0-9_.-]+")
@@ -27,6 +30,7 @@ class ProductConfig:
 class GitHubConfig:
     token: str | None = field(repr=False)
     per_page: int
+    token_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -37,6 +41,7 @@ class MailgunConfig:
     from_email: str
     to_emails: list[str]
     base_url: str
+    api_key_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -180,12 +185,31 @@ def load_config(path: Path) -> AppConfig:
 
     mailgun_enabled = bool(mailgun_raw.get("enabled", True))
     api_key_env = mailgun_raw.get("api_key_env", "MAILGUN_API_KEY")
-    api_key = mailgun_raw.get("api_key") or os.getenv(api_key_env)
+    # Priority: environment variable first, then the inline mailgun.api_key value.
+    env_api_key = os.getenv(api_key_env)
+    api_key = env_api_key or mailgun_raw.get("api_key")
+    api_key_source = f"env {api_key_env}" if env_api_key else ("config mailgun.api_key" if api_key else None)
     if mailgun_enabled and not api_key:
         raise ValueError(f"Mailgun API key is missing. Set {api_key_env} or mailgun.api_key.")
 
     token_env = github_raw.get("token_env", "GITHUB_TOKEN")
-    token = github_raw.get("token") or os.getenv(token_env)
+    # Priority: environment variable first, then the inline github.token value.
+    env_token = os.getenv(token_env)
+    token = env_token or github_raw.get("token")
+    token_source = f"env {token_env}" if env_token else ("config github.token" if token else None)
+    if token_source:
+        logger.debug("GitHub token loaded from %s.", token_source)
+    if not token:
+        logger.warning(
+            "No GitHub token found (github.token unset and env %s is empty); "
+            "requests are unauthenticated and limited to 60/hour.",
+            token_env,
+        )
+    if token_env.startswith(("github_pat_", "ghp_")):
+        logger.warning(
+            "github.token_env looks like a token value, but it must be an env var NAME "
+            '(e.g. token_env = "GITHUB_TOKEN"). Use github.token to inline the token itself.'
+        )
 
     products = load_products(path)
     if not products:
@@ -196,6 +220,7 @@ def load_config(path: Path) -> AppConfig:
         github=GitHubConfig(
             token=token,
             per_page=min(max(int(github_raw.get("per_page", 10)), 1), 100),
+            token_source=token_source,
         ),
         mailgun=MailgunConfig(
             enabled=mailgun_enabled,
@@ -209,6 +234,7 @@ def load_config(path: Path) -> AppConfig:
                 mailgun_raw["to_emails"] if mailgun_enabled else mailgun_raw.get("to_emails", [])
             ),
             base_url=mailgun_raw.get("base_url", "https://api.mailgun.net/v3").rstrip("/"),
+            api_key_source=api_key_source,
         ),
         monitor=MonitorConfig(
             interval_seconds=int(monitor_raw.get("interval_seconds", 3600)),

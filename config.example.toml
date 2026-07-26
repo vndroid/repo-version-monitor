@@ -3,7 +3,7 @@ path = "versions.sqlite3"
 
 [github]
 # Optional. You can also set GITHUB_TOKEN in the environment.
-token_env = "GITHUB_TOKEN"
+token = "GITHUB_TOKEN"
 per_page = 10
 
 [mailgun]
@@ -12,7 +12,7 @@ per_page = 10
 enabled = true
 # Required values. api_key should normally come from MAILGUN_API_KEY.
 domain = "mg.example.com"
-api_key_env = "MAILGUN_API_KEY"
+api_key = "MAILGUN_API_KEY"
 from_email = "Version Monitor <monitor@mg.example.com>"
 to_emails = ["you@example.com"]
 # For EU Mailgun accounts, use "https://api.eu.mailgun.net/v3".
