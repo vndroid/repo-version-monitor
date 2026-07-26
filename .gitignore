@@ -9,3 +9,4 @@ __pycache__/
 config.toml
 *.sqlite
 *.sqlite3
+.DS_Store

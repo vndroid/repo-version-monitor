@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import logging
 from pathlib import Path
+import time
 
 from repo_version_monitor.config import (
     add_product_to_config,
@@ -47,7 +48,11 @@ def _render_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> list
 def main() -> None:
     parser = argparse.ArgumentParser(description="Monitor GitHub tags and notify via Mailgun.")
     parser.add_argument("--config", default="config.toml", type=Path, help="Path to TOML config.")
-    parser.add_argument("--log-level", default="INFO", help="Python logging level.")
+    parser.add_argument(
+        "--log-level",
+        default=None,
+        help="Python logging level. Defaults to WARNING for 'check', INFO otherwise.",
+    )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("check", help="Run one check and exit.")
@@ -75,8 +80,10 @@ def main() -> None:
     run_parser.add_argument("--interval", type=int, default=None, help="Seconds between checks.")
 
     args = parser.parse_args()
+    default_level = "WARNING" if args.command == "check" else "INFO"
+    log_level = args.log_level or default_level
     logging.basicConfig(
-        level=getattr(logging, args.log_level.upper(), logging.INFO),
+        level=getattr(logging, log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
@@ -135,8 +142,32 @@ def main() -> None:
     monitor = VersionMonitor(config)
 
     if args.command == "check":
-        updates = asyncio.run(monitor.check_once())
-        print(f"Detected {len(updates)} update(s).")
+        show_progress = args.log_level is None
+        dots_printed = 0
+
+        async def _check() -> list:
+            nonlocal dots_printed
+
+            async def _ticker() -> None:
+                nonlocal dots_printed
+                while True:
+                    await asyncio.sleep(1)
+                    print(".", end="", flush=True)
+                    dots_printed += 1
+
+            ticker = asyncio.create_task(_ticker()) if show_progress else None
+            try:
+                return await monitor.check_once()
+            finally:
+                if ticker is not None:
+                    ticker.cancel()
+
+        start = time.monotonic()
+        updates = asyncio.run(_check())
+        elapsed = time.monotonic() - start
+        if dots_printed:
+            print()
+        print(f"Detected {len(updates)} update(s) in {elapsed:.1f}s.")
         for update in updates:
             old_tag = update.old_tag or "(first seen)"
             print(f"- {update.product_name}: {old_tag} -> {update.new_tag}")
