@@ -65,6 +65,11 @@ def main() -> None:
         "--name",
         help="Only check products with this name; all same-name entries are checked.",
     )
+    check_parser.add_argument(
+        "--only-blank",
+        action="store_true",
+        help="Only check products still shown as '(not checked yet)' in list.",
+    )
 
     add_parser = subparsers.add_parser("add", help="Add a GitHub repository to the config.")
     add_parser.add_argument("repository", help="GitHub repository in owner/name format.")
@@ -207,6 +212,16 @@ def main() -> None:
                 print(f"No product named {args.name!r} in the config.")
                 return
             print(f"Checking {len(matched)} product(s) named {args.name!r}.")
+        if args.only_blank:
+            candidates = matched if args.name is not None else config.products
+            monitor.store.initialize()
+            blank_count = sum(
+                1 for product in candidates if not monitor._has_latest_tag(product)
+            )
+            if blank_count == 0:
+                print("All products already have a latest tag; nothing to check.")
+                return
+            print(f"Checking {blank_count} unchecked product(s).")
         print(f"GitHub token: {config.github.token_source or 'not set (unauthenticated)'}")
         if config.mailgun.enabled:
             print(f"Mailgun API key: {config.mailgun.api_key_source or 'not set'}")
@@ -225,7 +240,7 @@ def main() -> None:
 
             ticker = asyncio.create_task(_ticker()) if show_progress else None
             try:
-                return await monitor.check_once(args.name)
+                return await monitor.check_once(args.name, only_blank=args.only_blank)
             finally:
                 if ticker is not None:
                     ticker.cancel()

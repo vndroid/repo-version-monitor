@@ -31,8 +31,14 @@ class VersionMonitor:
             base_url=config.mailgun.base_url,
         )
 
-    async def check_once(self, only_name: str | None = None) -> list[VersionUpdate]:
-        """Check all products, or only those matching only_name (all same-name entries)."""
+    async def check_once(
+        self, only_name: str | None = None, only_blank: bool = False
+    ) -> list[VersionUpdate]:
+        """Check all products, or a subset.
+
+        only_name: only products with this name (all same-name entries).
+        only_blank: only products without a latest tag in the database yet.
+        """
         self.store.initialize()
         removed = self.store.sync_config_hash(
             config_file_hash(self.config.source_path),
@@ -46,6 +52,10 @@ class VersionMonitor:
         products = self.config.products
         if only_name is not None:
             products = [product for product in products if product.name == only_name]
+        if only_blank:
+            products = [
+                product for product in products if not self._has_latest_tag(product)
+            ]
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             for product in products:
@@ -116,6 +126,10 @@ class VersionMonitor:
                     )
 
         return updates
+
+    def _has_latest_tag(self, product) -> bool:
+        stored = self.store.get_product(product.repository, product.branch)
+        return stored is not None and bool(stored.latest_tag)
 
     async def _fetch_tags(self, client: httpx.AsyncClient, repo: str, label: str) -> list:
         if self.github.token:

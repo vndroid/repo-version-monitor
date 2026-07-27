@@ -91,6 +91,12 @@ uv run repo-version-monitor --config config.toml check
 uv run repo-version-monitor --config config.toml check --name grafana
 ```
 
+只检查数据库中还没有版本记录的仓库（`list` 中显示 `(not checked yet)` 的），可与 `--name` 组合使用：
+
+```bash
+uv run repo-version-monitor --config config.toml check --only-blank
+```
+
 循环定时检查：
 
 ```bash
