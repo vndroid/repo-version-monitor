@@ -7,6 +7,7 @@ from repo_version_monitor.github import (
     GitHubGraphQLError,
     GitHubTag,
     filter_tags_for_branch,
+    normalize_tag_name,
     pick_latest_version_tag,
 )
 
@@ -97,6 +98,13 @@ def test_pick_handles_v_prefix_and_ignores_prereleases() -> None:
     picked = pick_latest_version_tag(tags)
 
     assert picked is not None and picked.name == "v1.6.38"
+
+
+def test_normalize_strips_v_prefix_only_before_digits() -> None:
+    assert normalize_tag_name("v1.2.3") == "1.2.3"
+    assert normalize_tag_name("1.2.3") == "1.2.3"
+    assert normalize_tag_name("vault-1.0") == "vault-1.0"
+    assert normalize_tag_name("v") == "v"
 
 
 def test_pick_returns_none_without_version_tags() -> None:

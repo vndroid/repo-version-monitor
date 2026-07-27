@@ -11,6 +11,7 @@ from repo_version_monitor.github import (
     GitHubClient,
     GitHubGraphQLError,
     filter_tags_for_branch,
+    normalize_tag_name,
     pick_latest_version_tag,
 )
 from repo_version_monitor.mailgun import MailgunClient, VersionUpdate
@@ -84,8 +85,15 @@ class VersionMonitor:
                         label,
                     )
                     latest = tags[0]
-                latest_tag = latest.name
+                # Store and compare without the 'v' prefix so repositories that
+                # switch between 'v1.2.3' and '1.2.3' styles don't cause noise.
+                latest_tag = normalize_tag_name(latest.name)
                 stored = self.store.get_product(repo, branch)
+                stored_tag = (
+                    normalize_tag_name(stored.latest_tag)
+                    if stored and stored.latest_tag
+                    else None
+                )
 
                 if stored is None:
                     # Persist immediately so a later mail failure never causes
@@ -95,18 +103,18 @@ class VersionMonitor:
                         event_ids.append(self.store.record_event(repo, None, latest_tag, branch))
                         updates.append(VersionUpdate(product.name, repo, None, latest_tag))
                     logger.info("Initialized %s at %s", label, latest_tag)
-                elif stored.latest_tag != latest_tag:
+                elif stored_tag != latest_tag:
                     self.store.upsert_product(product.name, repo, latest_tag, branch)
                     event_ids.append(
-                        self.store.record_event(repo, stored.latest_tag, latest_tag, branch)
+                        self.store.record_event(repo, stored_tag, latest_tag, branch)
                     )
                     updates.append(
-                        VersionUpdate(product.name, repo, stored.latest_tag, latest_tag)
+                        VersionUpdate(product.name, repo, stored_tag, latest_tag)
                     )
                     logger.info(
                         "Detected update for %s: %s -> %s",
                         label,
-                        stored.latest_tag,
+                        stored_tag,
                         latest_tag,
                     )
                 else:

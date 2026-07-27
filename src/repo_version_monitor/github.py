@@ -126,6 +126,16 @@ class GitHubClient:
         ]
 
 
+def normalize_tag_name(name: str) -> str:
+    """Strip a leading 'v' from version tags so 'v1.2.3' and '1.2.3' compare equal.
+
+    Only strips when 'v' is followed by a digit, leaving tags like 'vault-1.0' intact.
+    """
+    if len(name) > 1 and name[0] == "v" and name[1].isdigit():
+        return name[1:]
+    return name
+
+
 def pick_latest_version_tag(tags: list[GitHubTag]) -> GitHubTag | None:
     """Pick the highest version-like tag by numeric comparison.
 
