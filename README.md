@@ -85,6 +85,12 @@ uv run repo-version-monitor --config config.toml mailtest --ignore
 uv run repo-version-monitor --config config.toml check
 ```
 
+只检查指定 name 的仓库（存在同名条目时全部检查）：
+
+```bash
+uv run repo-version-monitor --config config.toml check --name grafana
+```
+
 循环定时检查：
 
 ```bash

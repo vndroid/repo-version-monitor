@@ -60,7 +60,11 @@ def main() -> None:
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("check", help="Run one check and exit.")
+    check_parser = subparsers.add_parser("check", help="Run one check and exit.")
+    check_parser.add_argument(
+        "--name",
+        help="Only check products with this name; all same-name entries are checked.",
+    )
 
     add_parser = subparsers.add_parser("add", help="Add a GitHub repository to the config.")
     add_parser.add_argument("repository", help="GitHub repository in owner/name format.")
@@ -197,6 +201,12 @@ def main() -> None:
     monitor = VersionMonitor(config)
 
     if args.command == "check":
+        if args.name is not None:
+            matched = [p for p in config.products if p.name == args.name]
+            if not matched:
+                print(f"No product named {args.name!r} in the config.")
+                return
+            print(f"Checking {len(matched)} product(s) named {args.name!r}.")
         print(f"GitHub token: {config.github.token_source or 'not set (unauthenticated)'}")
         if config.mailgun.enabled:
             print(f"Mailgun API key: {config.mailgun.api_key_source or 'not set'}")
@@ -215,7 +225,7 @@ def main() -> None:
 
             ticker = asyncio.create_task(_ticker()) if show_progress else None
             try:
-                return await monitor.check_once()
+                return await monitor.check_once(args.name)
             finally:
                 if ticker is not None:
                     ticker.cancel()

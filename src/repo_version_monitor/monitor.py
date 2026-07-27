@@ -31,7 +31,8 @@ class VersionMonitor:
             base_url=config.mailgun.base_url,
         )
 
-    async def check_once(self) -> list[VersionUpdate]:
+    async def check_once(self, only_name: str | None = None) -> list[VersionUpdate]:
+        """Check all products, or only those matching only_name (all same-name entries)."""
         self.store.initialize()
         removed = self.store.sync_config_hash(
             config_file_hash(self.config.source_path),
@@ -42,8 +43,12 @@ class VersionMonitor:
         updates: list[VersionUpdate] = []
         event_ids: list[int] = []
 
+        products = self.config.products
+        if only_name is not None:
+            products = [product for product in products if product.name == only_name]
+
         async with httpx.AsyncClient(timeout=30.0) as client:
-            for product in self.config.products:
+            for product in products:
                 repo, branch = product.repository, product.branch
                 label = f"{repo}@{branch}" if branch else repo
                 # Tiered fetch: GraphQL (date-ordered) when a token is configured,
