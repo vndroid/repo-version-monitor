@@ -11,6 +11,7 @@ import httpx
 from repo_version_monitor.config import (
     add_product_to_config,
     config_file_hash,
+    edit_product_branch,
     format_config,
     load_config,
     load_products,
@@ -69,6 +70,18 @@ def main() -> None:
         help="Track a branch line, e.g. v13: only tags starting with 'v13' or '13' are considered.",
     )
 
+    edit_parser = subparsers.add_parser("edit", help="Edit the branch of an existing product.")
+    edit_parser.add_argument("name", help="Product name as shown by 'list'.")
+    edit_parser.add_argument(
+        "--branch",
+        required=True,
+        help="New branch line, e.g. v13. Pass an empty string to clear the branch.",
+    )
+    edit_parser.add_argument(
+        "--repository",
+        help="Disambiguate when several products share the same name (owner/name format).",
+    )
+
     list_parser = subparsers.add_parser(
         "list", help="List configured repositories and known latest tags."
     )
@@ -118,6 +131,17 @@ def main() -> None:
         add_product_to_config(args.config, name, args.repository, args.branch)
         suffix = f", branch {args.branch}" if args.branch else ""
         print(f"Added {name} ({args.repository}{suffix}) to {args.config}.")
+        _sync_config_hash(args.config)
+        return
+
+    if args.command == "edit":
+        old_branch, product = edit_product_branch(
+            args.config, args.name, args.branch, args.repository
+        )
+        print(
+            f"Updated {product.name} ({product.repository}): "
+            f"branch {old_branch or '(none)'} -> {product.branch or '(none)'}."
+        )
         _sync_config_hash(args.config)
         return
 

@@ -4,6 +4,7 @@ import pytest
 
 from repo_version_monitor.config import (
     add_product_to_config,
+    edit_product_branch,
     format_config,
     load_config,
     load_products,
@@ -99,6 +100,61 @@ repository = "encode/httpx"
 
     with pytest.raises(ValueError, match="Invalid product name"):
         load_products(config_path)
+
+
+def test_edit_product_branch(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    add_product_to_config(config_path, "grafana", "grafana/grafana")
+
+    old_branch, product = edit_product_branch(config_path, "grafana", "13.0")
+
+    assert old_branch is None
+    assert product.branch == "13.0"
+    assert load_products(config_path)[0].branch == "13.0"
+
+
+def test_edit_product_branch_clear_with_empty_string(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    add_product_to_config(config_path, "pg", "postgres/postgres", branch="v13")
+
+    old_branch, product = edit_product_branch(config_path, "pg", "")
+
+    assert old_branch == "v13"
+    assert product.branch is None
+
+
+def test_edit_unknown_name_raises(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="No product named"):
+        edit_product_branch(config_path, "nope", "v13")
+
+
+def test_edit_ambiguous_name_requires_repository(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    add_product_to_config(config_path, "dup", "a/one")
+    add_product_to_config(config_path, "dup", "b/two")
+
+    with pytest.raises(ValueError, match="Use --repository"):
+        edit_product_branch(config_path, "dup", "v13")
+
+    # Disambiguated by repository it succeeds.
+    _, product = edit_product_branch(config_path, "dup", "v13", repository="b/two")
+    assert product.repository == "b/two"
+
+
+def test_edit_rejects_collision_with_existing_entry(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    add_product_to_config(config_path, "pg", "postgres/postgres")
+    add_product_to_config(config_path, "pg13", "postgres/postgres", branch="v13")
+
+    with pytest.raises(ValueError, match="already configured"):
+        edit_product_branch(config_path, "pg", "v13")
 
 
 def test_format_creates_config_from_template(tmp_path: Path) -> None:

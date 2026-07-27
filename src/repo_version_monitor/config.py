@@ -104,7 +104,54 @@ def format_config(path: Path, template_path: Path | None = None) -> str:
 
     # Raises on invalid TOML or invalid product entries.
     products = load_products(path)
+    _write_products(path, products)
+    return "formatted"
 
+
+def edit_product_branch(
+    path: Path, name: str, branch: str | None, repository: str | None = None
+) -> tuple[str | None, ProductConfig]:
+    """Change the branch of an existing product, selected by name.
+
+    Returns (old_branch, updated_product). branch=None or "" clears the branch.
+    """
+    branch = branch or None
+    if branch is not None:
+        validate_branch(branch)
+
+    products = load_products(path)
+    matches = [
+        product
+        for product in products
+        if product.name == name and (repository is None or product.repository == repository)
+    ]
+    if not matches:
+        scope = f" with repository {repository}" if repository else ""
+        raise ValueError(f"No product named {name!r}{scope}.")
+    if len(matches) > 1:
+        candidates = ", ".join(
+            f"{p.repository}@{p.branch}" if p.branch else p.repository for p in matches
+        )
+        raise ValueError(
+            f"Multiple products named {name!r}: {candidates}. Use --repository to disambiguate."
+        )
+
+    target = matches[0]
+    if any(
+        product.repository == target.repository and product.branch == branch
+        for product in products
+        if product is not target
+    ):
+        label = f"{target.repository} (branch {branch})" if branch else target.repository
+        raise ValueError(f"{label} is already configured.")
+
+    updated = ProductConfig(name=target.name, repository=target.repository, branch=branch)
+    _write_products(path, [updated if product is target else product for product in products])
+    return target.branch, updated
+
+
+def _write_products(path: Path, products: list[ProductConfig]) -> None:
+    """Rewrite all [[products]] blocks (normalized), keeping other content unchanged."""
     text = path.read_text(encoding="utf-8")
     remainder = _strip_product_blocks(text).rstrip("\n")
 
@@ -119,7 +166,6 @@ def format_config(path: Path, template_path: Path | None = None) -> str:
 
     parts = [part for part in (remainder, *blocks) if part]
     path.write_text("\n\n".join(part.rstrip("\n") for part in parts) + "\n", encoding="utf-8")
-    return "formatted"
 
 
 def _strip_product_blocks(text: str) -> str:
