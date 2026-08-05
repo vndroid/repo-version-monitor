@@ -224,7 +224,7 @@ def main() -> None:
                 )
             )
 
-        for line in _render_table(("ID", "NAME", "REPOSITORY", "BRANCH", "LATEST TAG"), rows):
+        for line in _render_table(("ID", "NAME", "REPOSITORY", "BRANCH", "LATEST"), rows):
             print(line)
         return
 
