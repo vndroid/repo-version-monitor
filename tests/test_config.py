@@ -4,6 +4,7 @@ import pytest
 
 from repo_version_monitor.config import (
     add_product_to_config,
+    delete_product,
     edit_product_branch,
     format_config,
     load_config,
@@ -155,6 +156,58 @@ def test_edit_rejects_collision_with_existing_entry(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="already configured"):
         edit_product_branch(config_path, "pg", "v13")
+
+
+def test_delete_by_name(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    add_product_to_config(config_path, "httpx", "encode/httpx")
+    add_product_to_config(config_path, "grafana", "grafana/grafana")
+
+    deleted = delete_product(config_path, name="httpx")
+
+    assert deleted.repository == "encode/httpx"
+    assert [p.name for p in load_products(config_path)] == ["grafana"]
+
+
+def test_delete_ambiguous_name_errors(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    add_product_to_config(config_path, "dup", "a/one")
+    add_product_to_config(config_path, "dup", "b/two")
+
+    with pytest.raises(ValueError, match="Multiple products match"):
+        delete_product(config_path, name="dup")
+
+    # Precise delete via repository succeeds.
+    deleted = delete_product(config_path, name="dup", repository="b/two")
+    assert deleted.repository == "b/two"
+    assert len(load_products(config_path)) == 1
+
+
+def test_delete_narrows_by_branch(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    add_product_to_config(config_path, "pg", "postgres/postgres")
+    add_product_to_config(config_path, "pg", "postgres/postgres", branch="v13")
+
+    with pytest.raises(ValueError, match="Multiple products match"):
+        delete_product(config_path, repository="postgres/postgres")
+
+    deleted = delete_product(config_path, repository="postgres/postgres", branch="v13")
+    assert deleted.branch == "v13"
+    remaining = load_products(config_path)
+    assert len(remaining) == 1 and remaining[0].branch is None
+
+
+def test_delete_requires_selector_and_match(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Specify --name or --repository"):
+        delete_product(config_path)
+    with pytest.raises(ValueError, match="No matching product"):
+        delete_product(config_path, name="nope")
 
 
 def test_format_creates_config_from_template(tmp_path: Path) -> None:

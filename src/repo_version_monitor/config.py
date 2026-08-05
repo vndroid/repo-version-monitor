@@ -150,6 +150,51 @@ def edit_product_branch(
     return target.branch, updated
 
 
+_UNSET = object()
+
+
+def delete_product(
+    path: Path,
+    name: str | None = None,
+    repository: str | None = None,
+    branch: object = _UNSET,
+) -> ProductConfig:
+    """Delete exactly one product matching the given selectors.
+
+    Raises when nothing matches or when the selection is ambiguous.
+    branch left as _UNSET means "any branch"; None/"" matches entries without one.
+    """
+    if name is None and repository is None:
+        raise ValueError("Specify --name or --repository.")
+
+    products = load_products(path)
+
+    def _matches(product: ProductConfig) -> bool:
+        if name is not None and product.name != name:
+            return False
+        if repository is not None and product.repository != repository:
+            return False
+        if branch is not _UNSET and product.branch != (branch or None):
+            return False
+        return True
+
+    matches = [product for product in products if _matches(product)]
+    if not matches:
+        raise ValueError("No matching product found.")
+    if len(matches) > 1:
+        candidates = ", ".join(
+            f"{p.repository}@{p.branch}" if p.branch else p.repository for p in matches
+        )
+        raise ValueError(
+            f"Multiple products match: {candidates}. "
+            "Use --repository (and --branch) to select exactly one."
+        )
+
+    target = matches[0]
+    _write_products(path, [product for product in products if product is not target])
+    return target
+
+
 def _write_products(path: Path, products: list[ProductConfig]) -> None:
     """Rewrite all [[products]] blocks (normalized), keeping other content unchanged."""
     text = path.read_text(encoding="utf-8")

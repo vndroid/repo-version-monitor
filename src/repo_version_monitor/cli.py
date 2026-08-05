@@ -9,8 +9,10 @@ import time
 import httpx
 
 from repo_version_monitor.config import (
+    _UNSET,
     add_product_to_config,
     config_file_hash,
+    delete_product,
     edit_product_branch,
     format_config,
     load_config,
@@ -79,6 +81,14 @@ def main() -> None:
         help="Track a branch line, e.g. v13: only tags starting with 'v13' or '13' are considered.",
     )
 
+    delete_parser = subparsers.add_parser("delete", help="Delete a product from the config.")
+    delete_parser.add_argument("--name", help="Select by product name; errors if ambiguous.")
+    delete_parser.add_argument("--repository", help="Select precisely by owner/name repository.")
+    delete_parser.add_argument(
+        "--branch",
+        help="Narrow selection to this branch; pass an empty string for entries without one.",
+    )
+
     edit_parser = subparsers.add_parser("edit", help="Edit the branch of an existing product.")
     edit_parser.add_argument("name", help="Product name as shown by 'list'.")
     edit_parser.add_argument(
@@ -140,6 +150,22 @@ def main() -> None:
         add_product_to_config(args.config, name, args.repository, args.branch)
         suffix = f", branch {args.branch}" if args.branch else ""
         print(f"Added {name} ({args.repository}{suffix}) to {args.config}.")
+        _sync_config_hash(args.config)
+        return
+
+    if args.command == "delete":
+        product = delete_product(
+            args.config,
+            args.name,
+            args.repository,
+            args.branch if args.branch is not None else _UNSET,
+        )
+        label = (
+            f"{product.repository}, branch {product.branch}"
+            if product.branch
+            else product.repository
+        )
+        print(f"Deleted {product.name} ({label}) from {args.config}.")
         _sync_config_hash(args.config)
         return
 
