@@ -1,0 +1,16 @@
+.git/
+.venv/
+.uv-cache/
+.idea/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+config.toml
+*.sqlite
+*.sqlite3
+tests/
+Dockerfile
+compose.yaml
+.dockerignore
+.DS_Store

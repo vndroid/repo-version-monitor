@@ -123,6 +123,33 @@ uv run --extra dev pytest tests/ -q
 
 修改配置的命令（`add`、`format`）会把 config.toml 的 SHA-256 哈希记录到数据库；`check`、`list`、`run` 执行时对比该哈希，若不存在则创建，若发现配置文件已变化，会自动清理数据库中失效的数据——例如某产品已从配置移除，其 `products` 记录和相关 `tag_events` 会被一并删除。
 
+## Docker 部署
+
+镜像默认执行 `run`（内置定时循环），配合 restart 策略实现后台常驻。配置文件挂载到 `/config/config.toml`，数据库放在 `/data` 卷上——配置中需设置 `path = "/data/versions.sqlite3"`。
+
+```bash
+docker compose up -d --build
+```
+
+或手动运行：
+
+```bash
+docker build -t repo-version-monitor .
+docker run -d --restart unless-stopped \
+  -e GITHUB_TOKEN="github_pat_xxx" -e MAILGUN_API_KEY="key-xxx" \
+  -v ./config.toml:/config/config.toml:ro \
+  -v rvm-data:/data \
+  repo-version-monitor
+```
+
+单次命令（check/list/mailtest 等）覆盖默认 CMD 即可：
+
+```bash
+docker compose run --rm repo-version-monitor check
+```
+
+若偏好外部调度（如宿主机 cron / K8s CronJob），用一次性容器执行 `check`，不再需要常驻的 `run` 容器。
+
 ## 关闭邮件通知
 
 把配置中的 `[mailgun]` 段的 `enabled` 改成 `false` 即可关闭邮件通知（默认为 `true`）。关闭后：

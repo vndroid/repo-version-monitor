@@ -1,0 +1,13 @@
+services:
+  repo-version-monitor:
+    build: .
+    restart: unless-stopped
+    environment:
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      MAILGUN_API_KEY: ${MAILGUN_API_KEY}
+    volumes:
+      - ./config.toml:/config/config.toml:ro
+      - data:/data
+
+volumes:
+  data:
