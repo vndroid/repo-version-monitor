@@ -4,12 +4,6 @@
 
 邮件发送使用 Mailgun API，具体可参考[官方手册](https://documentation.mailgun.com/docs/mailgun/user-manual/sending-messages/send-http)。
 
-## 安装
-
-```bash
-python3 -m pip install -e .
-```
-
 ## 配置
 
 复制示例配置：
