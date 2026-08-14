@@ -139,6 +139,78 @@ def test_add_product_rejects_unknown_provider(tmp_path: Path) -> None:
         add_product_to_config(config_path, "x", "a/b", provider="bitbucket")
 
 
+def test_add_self_managed_product_round_trip(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    add_product_to_config(
+        config_path,
+        "example",
+        "example/project",
+        provider="gitlab",
+        # No scheme: https is assumed.
+        external_url="jihulab.com",
+        token="glpat-inline",
+    )
+
+    assert config_path.read_text(encoding="utf-8").strip() == (
+        """
+[[products]]
+name = "example"
+provider = "gitlab"
+external_url = "https://jihulab.com"
+token = "glpat-inline"
+repository = "example/project"
+branch = ""
+""".strip()
+    )
+    product = load_products(config_path)[0]
+    assert (product.external_url, product.token) == ("https://jihulab.com", "glpat-inline")
+
+
+def test_same_repository_allowed_across_instances(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    add_product_to_config(config_path, "public", "acme/tool", provider="gitlab")
+    add_product_to_config(
+        config_path, "internal", "acme/tool", provider="gitlab", external_url="jihulab.com"
+    )
+    with pytest.raises(ValueError, match="already configured"):
+        add_product_to_config(
+            config_path, "dup", "acme/tool", provider="gitlab", external_url="https://jihulab.com/"
+        )
+
+    assert len(load_products(config_path)) == 2
+
+
+@pytest.mark.parametrize("external_url", ["not a url", "ssh://git.mycorp.com", "http://"])
+def test_add_product_rejects_invalid_external_url(tmp_path: Path, external_url: str) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        add_product_to_config(
+            config_path, "x", "a/b", provider="gitlab", external_url=external_url
+        )
+
+
+def test_external_url_rejected_for_github_products(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not supported for github"):
+        add_product_to_config(config_path, "x", "a/b", external_url="github.mycorp.com")
+
+
+def test_product_token_requires_external_url(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="token requires external_url"):
+        add_product_to_config(config_path, "x", "a/b", provider="gitlab", token="glpat-x")
+
+
 def test_load_config_reads_gitlab_section(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("GITLAB_TOKEN", raising=False)
     config_path = tmp_path / "config.toml"
@@ -149,7 +221,6 @@ enabled = false
 
 [gitlab]
 token = "glpat-inline"
-external_url = "https://gitlab.example.com/"
 
 [[products]]
 name = "runner"
@@ -163,20 +234,22 @@ repository = "gitlab-org/gitlab-runner"
 
     assert config.gitlab.token == "glpat-inline"
     assert config.gitlab.token_source == "config gitlab.token"
-    assert config.gitlab.external_url == "https://gitlab.example.com"
     assert config.products[0].provider == "gitlab"
 
 
-def test_load_config_rejects_renamed_gitlab_base_url(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("key", ["base_url", "external_url"])
+def test_load_config_rejects_instance_url_in_gitlab_section(
+    tmp_path: Path, monkeypatch, key: str
+) -> None:
     monkeypatch.delenv("GITLAB_TOKEN", raising=False)
     config_path = tmp_path / "config.toml"
     config_path.write_text(
-        """
+        f"""
 [mailgun]
 enabled = false
 
 [gitlab]
-base_url = "https://gitlab.example.com"
+{key} = "https://gitlab.example.com"
 
 [[products]]
 name = "runner"
@@ -186,7 +259,8 @@ repository = "gitlab-org/gitlab-runner"
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="renamed to external_url"):
+    # The instance URL belongs to the product now, not to the section.
+    with pytest.raises(ValueError, match="belongs to the product"):
         load_config(config_path)
 
 
@@ -257,6 +331,8 @@ repository = "gitlab-org/gitlab-runner"
 [[products]]
 name = "runner"
 provider = "gitlab"
+external_url = ""
+token = ""
 repository = "gitlab-org/gitlab-runner"
 branch = ""
 """.lstrip()
@@ -428,12 +504,16 @@ branch = "v13"
 [[products]]
 name = "httpx"
 provider = ""
+external_url = ""
+token = ""
 repository = "encode/httpx"
 branch = ""
 
 [[products]]
 name = "pg13"
 provider = ""
+external_url = ""
+token = ""
 repository = "postgres/postgres"
 branch = "v13"
 """.lstrip()
@@ -464,14 +544,14 @@ repository = "encode/httpx"
 
     result = format_config(config_path)
 
-    assert "gitlab.external_url" in result.added_settings
+    assert "gitlab.token" in result.added_settings
     assert "database.path" not in result.added_settings
     text = config_path.read_text(encoding="utf-8")
-    assert '[gitlab]\ntoken = ""\nexternal_url = ""' in text
+    assert '[gitlab]\ntoken = ""' in text
     # Existing values are never overwritten.
     assert 'path = "versions.sqlite3"' in text
     # Empty settings read back as the built-in defaults.
-    assert load_config(config_path).gitlab.external_url == "https://gitlab.com"
+    assert load_config(config_path).mailgun.api_url == "https://api.mailgun.net/v3"
 
 
 def test_format_fills_keys_inside_existing_sections(tmp_path: Path) -> None:
@@ -496,7 +576,7 @@ repository = "encode/httpx"
 
     text = config_path.read_text(encoding="utf-8")
     assert "# Keep this comment." in text
-    assert '[gitlab]\n# Keep this comment.\ntoken = "glpat-inline"\nexternal_url = ""\n' in text
+    assert '[gitlab]\n# Keep this comment.\ntoken = "glpat-inline"\n' in text
     assert "[monitor]\ninterval_seconds = 60\nnotify_on_first_seen = false\n" in text
     assert "gitlab.token" not in result.added_settings
     assert "monitor.interval_seconds" not in result.added_settings
@@ -531,7 +611,6 @@ per_page = 10
 
 [gitlab]
 token = ""
-external_url = ""
 
 [mailgun]
 enabled = false
@@ -554,7 +633,6 @@ branch = ""
 
     assert config.database.path == tmp_path / "versions.sqlite3"
     assert config.github.token is None
-    assert config.gitlab.external_url == "https://gitlab.com"
     assert config.mailgun.api_url == "https://api.mailgun.net/v3"
     assert config.products[0].provider == "github"
     assert config.products[0].branch is None

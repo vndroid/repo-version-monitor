@@ -1,4 +1,4 @@
-"""Parse the repository argument accepted by ``add``.
+"""Parse the repository and instance arguments accepted by ``add``.
 
 Accepted spellings, all resolving to the same product:
 
@@ -9,9 +9,10 @@ Accepted spellings, all resolving to the same product:
     git@gitlab.com:gitlab-org/gitlab.git
     https://gitlab.com/gitlab-org/gitlab/-/tags
 
-The provider is inferred from the host (see providers.PROVIDER_HOSTS). Hosts
-that belong to no known provider — i.e. self-managed instances — require an
-explicit ``--provider``.
+The provider is inferred from the host (see providers.PROVIDER_HOSTS). A host
+belonging to no known provider is a self-managed instance: it needs an explicit
+``--provider`` and becomes the product's ``external_url``, which can also be
+given directly with ``--external-url``.
 """
 
 from __future__ import annotations
@@ -39,23 +40,60 @@ _GITLAB_ROUTE_SEPARATOR = "-"
 class ParsedRepository:
     repository: str
     provider: str
-    #: Host taken from the input, lowercased; None when the input had no host.
+    #: Self-managed instance URL; None means the provider's public instance.
+    external_url: str | None = None
+    #: Host the input pointed at, lowercased; None when no host was given.
     host: str | None = None
     #: True when the provider was derived from a well-known host.
     inferred_from_host: bool = False
 
 
-def parse_repository_input(raw: str, provider: str | None = None) -> ParsedRepository:
-    """Split a repository argument into (repository path, provider, host).
+def normalize_external_url(value: str) -> str:
+    """Normalize an instance URL: default to https:// and drop trailing slashes.
 
-    ``provider`` is the explicit ``--provider`` value, or None when unset.
-    Raises ValueError on unusable input, on an unknown host without an
-    explicit provider, and when the host contradicts ``--provider``.
+    "jihulab.com" and "https://jihulab.com/" both become "https://jihulab.com".
+    """
+    url = (value or "").strip()
+    if not url:
+        raise ValueError("external_url is empty; expected e.g. https://gitlab.example.com.")
+    match = _SCHEME_PATTERN.match(url)
+    if match:
+        scheme = match.group("scheme").lower()
+        if scheme not in ("http", "https"):
+            raise ValueError(f"Unsupported scheme {scheme}:// in {value!r}: use http:// or https://.")
+        rest = url[match.end() :]
+    else:
+        # No scheme given: https by default, http has to be spelled out.
+        scheme, rest = "https", url
+    host, separator, path = rest.partition("/")
+    return f"{scheme}://{host.lower()}{separator}{path}".rstrip("/")
+
+
+def url_host(url: str) -> str:
+    """Host (with port) of a normalized instance URL."""
+    return urlsplit(url).netloc.lower()
+
+
+def parse_repository_input(
+    raw: str, provider: str | None = None, external_url: str | None = None
+) -> ParsedRepository:
+    """Resolve the repository path, provider and instance URL of one product.
+
+    ``provider`` and ``external_url`` are the ``--provider`` / ``--external-url``
+    values, or None when unset. Raises ValueError on unusable input, on an
+    unknown host without an explicit provider, and on contradicting arguments.
     """
     if provider is not None and provider not in SUPPORTED_PROVIDERS:
         supported = ", ".join(SUPPORTED_PROVIDERS)
         raise ValueError(f"Invalid provider {provider!r}: expected one of {supported}.")
+    if external_url is not None and provider is None:
+        supported = ", ".join(SUPPORTED_PROVIDERS)
+        raise ValueError(
+            "--external-url requires --provider: an instance URL alone does not say "
+            f"which API to use. Pass one of: {supported}."
+        )
 
+    instance_url = normalize_external_url(external_url) if external_url else None
     value = (raw or "").strip()
     if not value:
         raise ValueError("Repository is required, e.g. owner/name or github.com/owner/name.")
@@ -73,13 +111,19 @@ def parse_repository_input(raw: str, provider: str | None = None) -> ParsedRepos
         host = parts[0].lower()
         parts = parts[1:]
 
+    if instance_url is not None and host is not None and host != url_host(instance_url):
+        raise ValueError(
+            f"Host {host} in the repository argument does not match "
+            f"--external-url {instance_url}. Drop one of them."
+        )
+
     if _GITLAB_ROUTE_SEPARATOR in parts:
         parts = parts[: parts.index(_GITLAB_ROUTE_SEPARATOR)]
     if parts and parts[-1].endswith(".git"):
         parts[-1] = parts[-1][: -len(".git")]
     parts = [part for part in parts if part]
 
-    resolved = _resolve_provider(raw, host, provider)
+    resolved = _resolve_provider(raw, host, instance_url, provider)
 
     # A pasted URL often carries extra route segments ('/tree/main', '/releases/...').
     # GitHub paths are always owner/name, so anything beyond that is a route.
@@ -92,51 +136,33 @@ def parse_repository_input(raw: str, provider: str | None = None) -> ParsedRepos
             + (" (GitLab subgroups allowed)." if resolved == "gitlab" else ".")
         )
 
-    # Imported lazily: config imports the provider registry, and keeping the
-    # dependency one-way here avoids any import order surprises.
-    from repo_version_monitor.config import validate_repository
+    # Imported lazily: config imports this module, so keep the dependency one-way.
+    from repo_version_monitor.config import validate_external_url, validate_repository
 
     repository = "/".join(parts)
     validate_repository(repository, resolved)
 
+    resolved_url = _resolve_external_url(host, instance_url, resolved)
+    if resolved_url is not None:
+        validate_external_url(resolved_url, resolved)
+
     return ParsedRepository(
         repository=repository,
         provider=resolved,
-        host=host,
+        external_url=resolved_url,
+        host=host or (url_host(instance_url) if instance_url else None),
         inferred_from_host=host is not None and host in PROVIDER_HOSTS,
     )
 
 
-def host_mismatch_warning(
-    parsed: ParsedRepository, configured_external_url: str | None
-) -> str | None:
-    """Warn when the host in the input is not the instance that will be queried.
-
-    The provider clients are configured globally, so a self-managed host only
-    works after ``[gitlab] external_url`` points at it.
-    """
-    if parsed.host is None:
+def _resolve_external_url(host: str | None, instance_url: str | None, provider: str) -> str | None:
+    """The instance to query, or None for the provider's public one."""
+    if instance_url is not None:
+        # gitlab.com spelled out as --external-url is still the public instance.
+        return None if url_host(instance_url) in PROVIDER_HOSTS else instance_url
+    if host is None or host in PROVIDER_HOSTS:
         return None
-
-    if parsed.provider == "github":
-        # The GitHub client always talks to github.com / api.github.com.
-        if parsed.host not in ("github.com", "www.github.com"):
-            return (
-                f"Host {parsed.host} is not github.com; the github provider always queries "
-                "github.com. GitHub Enterprise instances are not supported yet."
-            )
-        return None
-
-    default_host = DEFAULT_PROVIDER_HOSTS[parsed.provider]
-    configured_host = _hostname(configured_external_url) or default_host
-    if parsed.host != configured_host:
-        return (
-            f"Host {parsed.host} does not match the configured "
-            f"{parsed.provider}.external_url ({configured_host}); tags would be fetched from "
-            f"{configured_host}. Set [{parsed.provider}] external_url = "
-            f'"https://{parsed.host}" in the config.'
-        )
-    return None
+    return normalize_external_url(host)
 
 
 def _strip_scheme(value: str) -> str:
@@ -172,34 +198,28 @@ def _is_host_segment(segment: str, total_parts: int) -> bool:
     return bool(_HOST_PATTERN.fullmatch(lowered)) and total_parts >= 3
 
 
-def _resolve_provider(raw: str, host: str | None, provider: str | None) -> str:
-    inferred = PROVIDER_HOSTS.get(host) if host else None
+def _resolve_provider(
+    raw: str, host: str | None, instance_url: str | None, provider: str | None
+) -> str:
+    known_host = host or (url_host(instance_url) if instance_url else None)
+    inferred = PROVIDER_HOSTS.get(known_host) if known_host else None
 
     if provider is not None:
         if inferred is not None and inferred != provider:
             raise ValueError(
-                f"--provider {provider} conflicts with host {host}, which is {inferred}. "
+                f"--provider {provider} conflicts with host {known_host}, which is {inferred}. "
                 f"Drop --provider or fix the repository argument {raw!r}."
             )
         return provider
 
-    if host is None:
+    if known_host is None:
         return DEFAULT_PROVIDER
     if inferred is not None:
         return inferred
 
     supported = ", ".join(SUPPORTED_PROVIDERS)
     raise ValueError(
-        f"Cannot tell which provider hosts {host}; it is not a known public instance. "
+        f"Cannot tell which provider hosts {known_host}; it is not a known public instance. "
         f"Pass --provider explicitly (one of: {supported}), "
         f"e.g. --provider=gitlab for a self-managed GitLab."
     )
-
-
-def _hostname(url: str | None) -> str | None:
-    if not url:
-        return None
-    value = url.strip()
-    if not _SCHEME_PATTERN.match(value):
-        value = "https://" + value
-    return urlsplit(value).netloc.lower() or None

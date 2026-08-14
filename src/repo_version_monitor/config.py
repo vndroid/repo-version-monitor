@@ -9,6 +9,7 @@ import re
 import tomllib
 
 from repo_version_monitor.providers import DEFAULT_PROVIDER, SUPPORTED_PROVIDERS
+from repo_version_monitor.repo_url import normalize_external_url, url_host
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +17,10 @@ _REPOSITORY_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 # GitLab projects may be nested under subgroups: group/subgroup/project.
 _GITLAB_REPOSITORY_PATTERN = re.compile(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+")
 _PRODUCT_NAME_PATTERN = re.compile(r"[A-Za-z0-9_.-]+")
+# http(s)://host[:port][/path] — GitLab may live under a relative URL root.
+_EXTERNAL_URL_PATTERN = re.compile(
+    r"https?://[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*(?::\d{1,5})?(?:/[A-Za-z0-9_.~-]+)*"
+)
 
 
 @dataclass(frozen=True)
@@ -24,6 +29,10 @@ class ProductConfig:
     repository: str
     branch: str | None = None
     provider: str = DEFAULT_PROVIDER
+    #: Self-managed instance URL; None means the provider's public instance.
+    external_url: str | None = None
+    #: Token for that self-managed instance; optional.
+    token: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -35,9 +44,12 @@ class GitHubConfig:
 
 @dataclass(frozen=True)
 class GitLabConfig:
+    """Settings for the public gitlab.com instance.
+
+    Self-managed instances are configured per product (external_url + token).
+    """
+
     token: str | None = field(repr=False)
-    #: External URL of the instance, e.g. https://gitlab.example.com.
-    external_url: str
     token_source: str | None = None
 
 
@@ -85,24 +97,24 @@ def add_product_to_config(
     repository: str,
     branch: str | None = None,
     provider: str = DEFAULT_PROVIDER,
+    external_url: str | None = None,
+    token: str | None = None,
 ) -> None:
-    validate_product_name(name)
-    validate_provider(provider)
-    validate_repository(repository, provider)
-    if branch is not None:
-        validate_branch(branch)
-    products = load_products(path)
-    if any(
-        product.provider == provider
-        and product.repository == repository
-        and product.branch == branch
-        for product in products
-    ):
-        label = f"{repository} (branch {branch})" if branch else repository
-        raise ValueError(f"{label} is already configured.")
+    product = ProductConfig(
+        name=name,
+        repository=repository,
+        branch=branch,
+        provider=provider,
+        external_url=normalize_external_url(external_url) if external_url else None,
+        token=token or None,
+    )
+    validate_product(product)
+
+    if any(_product_key(existing) == _product_key(product) for existing in load_products(path)):
+        raise ValueError(f"{_product_label(product)} is already configured.")
 
     with path.open("a", encoding="utf-8") as file:
-        file.write("\n" + _product_block(ProductConfig(name, repository, branch, provider)))
+        file.write("\n" + _product_block(product))
 
 
 # Every setting the config may carry, in the order used by config.example.toml.
@@ -111,7 +123,8 @@ def add_product_to_config(
 _DEFAULT_SETTINGS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     ("database", (("path", '""'),)),
     ("github", (("token", '""'), ("per_page", "10"))),
-    ("gitlab", (("token", '""'), ("external_url", '""'))),
+    # gitlab.com only; self-managed instances live in their [[products]] block.
+    ("gitlab", (("token", '""'),)),
     (
         "mailgun",
         (
@@ -170,7 +183,7 @@ def _fill_missing_settings(text: str) -> tuple[str, list[str]]:
     """
     raw = tomllib.loads(text)
     # Never add the new spelling next to an outdated one.
-    reject_renamed_settings(raw)
+    reject_outdated_settings(raw)
     lines = text.splitlines()
     added: list[str] = []
 
@@ -236,22 +249,21 @@ def edit_product_branch(
         )
 
     target = matches[0]
-    if any(
-        product.provider == target.provider
-        and product.repository == target.repository
-        and product.branch == branch
-        for product in products
-        if product is not target
-    ):
-        label = f"{target.repository} (branch {branch})" if branch else target.repository
-        raise ValueError(f"{label} is already configured.")
-
     updated = ProductConfig(
         name=target.name,
         repository=target.repository,
         branch=branch,
         provider=target.provider,
+        external_url=target.external_url,
+        token=target.token,
     )
+    if any(
+        _product_key(product) == _product_key(updated)
+        for product in products
+        if product is not target
+    ):
+        raise ValueError(f"{_product_label(updated)} is already configured.")
+
     _write_products(path, [updated if product is target else product for product in products])
     return target.branch, updated
 
@@ -265,17 +277,19 @@ def delete_product(
     repository: str | None = None,
     branch: object = _UNSET,
     provider: str | None = None,
+    external_url: str | None = None,
 ) -> ProductConfig:
     """Delete exactly one product matching the given selectors.
 
     Raises when nothing matches or when the selection is ambiguous.
     branch left as _UNSET means "any branch"; None/"" matches entries without one.
-    provider=None matches any provider.
+    provider=None and external_url=None match any value.
     """
     if name is None and repository is None:
         raise ValueError("Specify --name or --repository.")
 
     products = load_products(path)
+    wanted_url = normalize_external_url(external_url) if external_url else None
 
     def _matches(product: ProductConfig) -> bool:
         if name is not None and product.name != name:
@@ -286,6 +300,8 @@ def delete_product(
             return False
         if provider is not None and product.provider != provider:
             return False
+        if wanted_url is not None and product.external_url != wanted_url:
+            return False
         return True
 
     matches = [product for product in products if _matches(product)]
@@ -294,8 +310,8 @@ def delete_product(
     if len(matches) > 1:
         candidates = ", ".join(_product_label(p) for p in matches)
         raise ValueError(
-            f"Multiple products match: {candidates}. "
-            "Use --repository (with --branch or --provider) to select exactly one."
+            f"Multiple products match: {candidates}. Use --repository "
+            "(with --branch, --provider or --external-url) to select exactly one."
         )
 
     target = matches[0]
@@ -303,22 +319,30 @@ def delete_product(
     return target
 
 
+def _product_key(product: ProductConfig) -> tuple[str, str, str, str | None]:
+    """What makes a product unique: same path on two instances is two products."""
+    return (product.provider, product.external_url or "", product.repository, product.branch)
+
+
 def _product_label(product: ProductConfig) -> str:
-    label = (
-        f"{product.repository}@{product.branch}" if product.branch else product.repository
-    )
+    repository = product.repository
+    if product.external_url:
+        repository = f"{url_host(product.external_url)}/{repository}"
+    label = f"{repository}@{product.branch}" if product.branch else repository
     if product.provider != DEFAULT_PROVIDER:
         label = f"{product.provider}:{label}"
     return label
 
 
 def _product_block(product: ProductConfig) -> str:
-    """Render one [[products]] block; an empty provider means the default one."""
+    """Render one [[products]] block; empty values mean "use the default"."""
     provider = "" if product.provider == DEFAULT_PROVIDER else product.provider
     return (
         "[[products]]\n"
         f'name = "{_escape_toml_string(product.name)}"\n'
         f'provider = "{provider}"\n'
+        f'external_url = "{product.external_url or ""}"\n'
+        f'token = "{_escape_toml_string(product.token or "")}"\n'
         f'repository = "{product.repository}"\n'
         f'branch = "{_escape_toml_string(product.branch or "")}"\n'
     )
@@ -364,20 +388,19 @@ def load_products(path: Path) -> list[ProductConfig]:
 
     products = []
     for item in raw.get("products", []):
-        name = item["name"]
-        repository = item["repository"]
-        # An empty branch string means "no branch" (written by `format`).
-        branch = item.get("branch") or None
-        # A missing/empty provider means GitHub, keeping old configs valid.
-        provider = item.get("provider") or DEFAULT_PROVIDER
-        validate_product_name(name)
-        validate_provider(provider)
-        validate_repository(repository, provider)
-        if branch is not None:
-            validate_branch(branch)
-        products.append(
-            ProductConfig(name=name, repository=repository, branch=branch, provider=provider)
+        # Empty strings mean "unset", so `format` can write every key out.
+        external_url = item.get("external_url") or None
+        product = ProductConfig(
+            name=item["name"],
+            repository=item["repository"],
+            branch=item.get("branch") or None,
+            # A missing/empty provider means GitHub, keeping old configs valid.
+            provider=item.get("provider") or DEFAULT_PROVIDER,
+            external_url=normalize_external_url(external_url) if external_url else None,
+            token=item.get("token") or None,
         )
+        validate_product(product)
+        products.append(product)
     return products
 
 
@@ -392,52 +415,43 @@ def resolve_database_path(config_path: Path) -> Path:
     return db_path
 
 
-def read_provider_external_url(config_path: Path, provider: str) -> str | None:
-    """Return the external_url configured for a provider, or None when unset.
-
-    Reads the raw TOML only, so it works before the full config is valid
-    (e.g. during `add`, when Mailgun settings may still be missing).
-    """
-    if provider == DEFAULT_PROVIDER:
-        return None
-    try:
-        with config_path.open("rb") as file:
-            raw = tomllib.load(file)
-    except (OSError, tomllib.TOMLDecodeError):
-        return None
-    return _provider_external_url(raw, provider)
-
-
-def _provider_external_url(raw: dict, provider: str) -> str | None:
-    """Read [<provider>] external_url, rejecting the old base_url spelling."""
-    reject_renamed_settings(raw)
-    external_url = raw.get(provider, {}).get("external_url")
-    return external_url.rstrip("/") if isinstance(external_url, str) and external_url else None
-
-
-# Settings renamed along the way; the old spelling is rejected with a hint
-# instead of being silently ignored, which would fall back to a default.
-_RENAMED_SETTINGS: tuple[tuple[str, str, str], ...] = (
-    ("gitlab", "base_url", "external_url"),
-    ("mailgun", "base_url", "api_url"),
+# Settings that moved or were renamed. They are rejected with a hint instead of
+# being silently ignored, which would quietly fall back to a default.
+_OUTDATED_SETTINGS: tuple[tuple[str, str, str], ...] = (
+    (
+        "mailgun",
+        "base_url",
+        'has been renamed to api_url; rename the key, e.g. api_url = "{value}".',
+    ),
+    (
+        "gitlab",
+        "base_url",
+        "belongs to the product it applies to now: remove it from [gitlab], which only "
+        "configures gitlab.com, and set external_url in the [[products]] block of each "
+        'self-managed project (this key held "{value}").',
+    ),
+    (
+        "gitlab",
+        "external_url",
+        "belongs to the product it applies to now: remove it from [gitlab], which only "
+        "configures gitlab.com, and set external_url in the [[products]] block of each "
+        'self-managed project (this key held "{value}").',
+    ),
 )
 
 
-def reject_renamed_settings(raw: dict) -> None:
-    for section, old_key, new_key in _RENAMED_SETTINGS:
+def reject_outdated_settings(raw: dict) -> None:
+    for section, key, hint in _OUTDATED_SETTINGS:
         values = raw.get(section)
-        if isinstance(values, dict) and old_key in values:
-            raise ValueError(
-                f"[{section}] {old_key} has been renamed to {new_key}; rename the key, "
-                f'e.g. {new_key} = "{values[old_key]}".'
-            )
+        if isinstance(values, dict) and key in values:
+            raise ValueError(f"[{section}] {key} " + hint.format(value=values[key]))
 
 
 def load_config(path: Path) -> AppConfig:
     with path.open("rb") as file:
         raw = tomllib.load(file)
 
-    reject_renamed_settings(raw)
+    reject_outdated_settings(raw)
 
     github_raw = raw.get("github", {})
     gitlab_raw = raw.get("gitlab", {})
@@ -503,11 +517,7 @@ def load_config(path: Path) -> AppConfig:
             per_page=min(max(int(github_raw.get("per_page") or 10), 1), 100),
             token_source=token_source,
         ),
-        gitlab=GitLabConfig(
-            token=gitlab_token,
-            external_url=_provider_external_url(raw, "gitlab") or DEFAULT_GITLAB_EXTERNAL_URL,
-            token_source=gitlab_token_source,
-        ),
+        gitlab=GitLabConfig(token=gitlab_token, token_source=gitlab_token_source),
         mailgun=MailgunConfig(
             enabled=mailgun_enabled,
             # When disabled, no Mailgun settings are required.
@@ -529,6 +539,40 @@ def load_config(path: Path) -> AppConfig:
         products=products,
         source_path=path,
     )
+
+
+def validate_product(product: ProductConfig) -> None:
+    """Validate one product entry, including its instance settings."""
+    validate_product_name(product.name)
+    validate_provider(product.provider)
+    validate_repository(product.repository, product.provider)
+    if product.branch is not None:
+        validate_branch(product.branch)
+    if product.external_url is not None:
+        validate_external_url(product.external_url, product.provider)
+    if product.token and product.provider == DEFAULT_PROVIDER:
+        raise ValueError(
+            f"Product {product.name!r}: token is only used for self-managed instances; "
+            f"the {DEFAULT_PROVIDER} token belongs in the [{DEFAULT_PROVIDER}] section."
+        )
+    if product.token and product.external_url is None:
+        raise ValueError(
+            f"Product {product.name!r}: token requires external_url; the token for the "
+            f"public instance belongs in the [{product.provider}] section."
+        )
+
+
+def validate_external_url(external_url: str, provider: str = DEFAULT_PROVIDER) -> None:
+    if provider == DEFAULT_PROVIDER:
+        raise ValueError(
+            f"external_url is not supported for {DEFAULT_PROVIDER} products: "
+            "GitHub Enterprise instances cannot be monitored yet."
+        )
+    if not _EXTERNAL_URL_PATTERN.fullmatch(external_url):
+        raise ValueError(
+            f"Invalid external_url {external_url!r}: expected a full instance URL such as "
+            "https://gitlab.example.com."
+        )
 
 
 def validate_product_name(name: str) -> None:

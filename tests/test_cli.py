@@ -43,43 +43,147 @@ def test_add_without_host_defaults_to_github(tmp_path: Path, capsys, monkeypatch
     assert (product.provider, product.repository) == ("github", "encode/httpx")
 
 
-def test_add_self_managed_gitlab_warns_about_external_url(
+def test_add_self_managed_instance_with_explicit_external_url(
     tmp_path: Path, capsys, monkeypatch
 ) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text("", encoding="utf-8")
 
-    _run_add(config_path, monkeypatch, "git.mycorp.com/group/project", "--provider", "gitlab")
+    _run_add(
+        config_path,
+        monkeypatch,
+        "gitlab-org/gitlab-runner",
+        "--provider",
+        "gitlab",
+        "--external-url",
+        "jihulab.com",
+    )
 
     product = load_products(config_path)[0]
-    assert (product.provider, product.repository) == ("gitlab", "group/project")
-    assert "Warning:" in capsys.readouterr().out
+    assert (product.provider, product.repository, product.external_url, product.token) == (
+        "gitlab",
+        "gitlab-org/gitlab-runner",
+        "https://jihulab.com",
+        None,
+    )
+    out = capsys.readouterr().out
+    assert "gitlab:jihulab.com/gitlab-org/gitlab-runner" in out
+    assert "anonymous access" in out
 
 
-def test_add_self_managed_gitlab_matching_external_url_is_quiet(
+def test_add_self_managed_instance_from_the_repository_host(
     tmp_path: Path, capsys, monkeypatch
 ) -> None:
     config_path = tmp_path / "config.toml"
-    config_path.write_text(
-        '[gitlab]\nexternal_url = "https://git.mycorp.com"\n', encoding="utf-8"
+    config_path.write_text("", encoding="utf-8")
+
+    _run_add(
+        config_path,
+        monkeypatch,
+        "https://git.mycorp.com/group/sub/project",
+        "--provider",
+        "gitlab",
+        "--token",
+        "glpat-x",
     )
 
-    _run_add(config_path, monkeypatch, "git.mycorp.com/group/project", "--provider", "gitlab")
+    product = load_products(config_path)[0]
+    assert (product.external_url, product.repository, product.token) == (
+        "https://git.mycorp.com",
+        "group/sub/project",
+        "glpat-x",
+    )
+    assert "(token)" in capsys.readouterr().out
 
-    assert "Warning:" not in capsys.readouterr().out
+
+def test_add_external_url_without_provider_exits(tmp_path: Path, capsys, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    with pytest.raises(SystemExit):
+        _run_add(config_path, monkeypatch, "a/b", "--external-url", "jihulab.com")
+
+    assert "requires --provider" in capsys.readouterr().err
+    assert config_path.read_text(encoding="utf-8") == ""
 
 
-def test_add_warns_when_config_still_uses_base_url(tmp_path: Path, capsys, monkeypatch) -> None:
+def test_add_external_url_conflicting_with_host_exits(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    with pytest.raises(SystemExit):
+        _run_add(
+            config_path,
+            monkeypatch,
+            "jihulab.com/a/b",
+            "--provider",
+            "gitlab",
+            "--external-url",
+            "git.mycorp.com",
+        )
+
+    assert "does not match --external-url" in capsys.readouterr().err
+
+
+def test_list_shows_the_instance_host(tmp_path: Path, capsys, monkeypatch) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text(
-        '[gitlab]\nbase_url = "https://git.mycorp.com"\n', encoding="utf-8"
+        """
+[[products]]
+name = "public"
+provider = "gitlab"
+repository = "acme/tool"
+
+[[products]]
+name = "internal"
+provider = "gitlab"
+external_url = "https://jihulab.com"
+repository = "acme/tool"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["repo-version-monitor", "--config", str(config_path), "list"]
     )
 
-    _run_add(config_path, monkeypatch, "git.mycorp.com/group/project", "--provider", "gitlab")
+    main()
 
-    # The product is still added; the stale key is reported instead of the host check.
-    assert load_products(config_path)[0].repository == "group/project"
-    assert "renamed to external_url" in capsys.readouterr().out
+    lines = capsys.readouterr().out.splitlines()
+    # Self-managed products are shown the way they are typed into `add`.
+    assert lines[1].split()[:4] == ["01", "internal", "gitlab", "jihulab.com/acme/tool"]
+    assert lines[2].split()[:4] == ["02", "public", "gitlab", "acme/tool"]
+
+
+def test_delete_disambiguates_by_instance(tmp_path: Path, capsys, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    _run_add(config_path, monkeypatch, "acme/tool", "--provider", "gitlab")
+    _run_add(
+        config_path, monkeypatch, "acme/tool", "--provider", "gitlab", "--external-url",
+        "jihulab.com",
+    )
+    capsys.readouterr()
+
+    def _delete(*delete_args: str) -> None:
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["repo-version-monitor", "--config", str(config_path), "delete", *delete_args],
+        )
+        main()
+
+    # Ambiguous without the instance.
+    with pytest.raises(SystemExit):
+        _delete("--repository", "acme/tool")
+    assert "Multiple products match" in capsys.readouterr().err
+
+    _delete("--repository", "acme/tool", "--external-url", "jihulab.com")
+
+    remaining = load_products(config_path)
+    assert len(remaining) == 1
+    assert remaining[0].external_url is None
 
 
 def test_add_unknown_host_without_provider_exits(tmp_path: Path, capsys, monkeypatch) -> None:

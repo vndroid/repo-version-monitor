@@ -4,7 +4,7 @@ import pytest
 
 from repo_version_monitor.repo_url import (
     ParsedRepository,
-    host_mismatch_warning,
+    normalize_external_url,
     parse_repository_input,
 )
 
@@ -87,7 +87,7 @@ def test_hostless_subgroup_path_needs_gitlab() -> None:
 def test_explicit_provider_without_host() -> None:
     parsed = parse_repository_input("gitlab-org/gitlab", provider="gitlab")
 
-    assert parsed == ParsedRepository("gitlab-org/gitlab", "gitlab", None, False)
+    assert parsed == ParsedRepository("gitlab-org/gitlab", "gitlab")
 
 
 def test_explicit_provider_matching_host_is_accepted() -> None:
@@ -130,40 +130,81 @@ def test_invalid_provider_errors() -> None:
         parse_repository_input("a/b", provider="bitbucket")
 
 
-def test_no_warning_when_host_matches_configured_external_url() -> None:
-    parsed = parse_repository_input("gitlab.com/a/b")
-
-    assert host_mismatch_warning(parsed, "https://gitlab.com") is None
-    # Unset external_url falls back to the provider default.
-    assert host_mismatch_warning(parsed, None) is None
-
-
-def test_warning_when_self_managed_host_is_not_configured() -> None:
-    parsed = parse_repository_input("git.mycorp.com/a/b", provider="gitlab")
-
-    warning = host_mismatch_warning(parsed, "https://gitlab.com")
-
-    assert warning is not None
-    assert "git.mycorp.com" in warning
-    assert "external_url" in warning
-
-
-def test_no_warning_when_self_managed_host_is_configured() -> None:
-    parsed = parse_repository_input("git.mycorp.com/a/b", provider="gitlab")
-
-    assert host_mismatch_warning(parsed, "https://git.mycorp.com/") is None
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("jihulab.com", "https://jihulab.com"),
+        ("https://jihulab.com", "https://jihulab.com"),
+        ("https://jihulab.com/", "https://jihulab.com"),
+        ("HTTPS://JiHuLab.com", "https://jihulab.com"),
+        # http has to be spelled out; it is kept as given.
+        ("http://git.mycorp.com", "http://git.mycorp.com"),
+        ("git.mycorp.com:8443", "https://git.mycorp.com:8443"),
+        # GitLab under a relative URL root.
+        ("git.mycorp.com/gitlab", "https://git.mycorp.com/gitlab"),
+    ],
+)
+def test_normalize_external_url(value: str, expected: str) -> None:
+    assert normalize_external_url(value) == expected
 
 
-def test_warning_for_non_github_com_host() -> None:
-    parsed = parse_repository_input("github.mycorp.com/a/b", provider="github")
-
-    warning = host_mismatch_warning(parsed, None)
-
-    assert warning is not None
-    assert "github.com" in warning
+def test_normalize_external_url_rejects_other_schemes() -> None:
+    with pytest.raises(ValueError, match="Unsupported scheme"):
+        normalize_external_url("ssh://git.mycorp.com")
 
 
-def test_no_warning_without_host() -> None:
-    parsed = parse_repository_input("a/b")
+def test_self_managed_host_becomes_the_external_url() -> None:
+    parsed = parse_repository_input("jihulab.com/gitlab-org/gitlab-runner", provider="gitlab")
 
-    assert host_mismatch_warning(parsed, "https://gitlab.com") is None
+    assert parsed.external_url == "https://jihulab.com"
+    assert parsed.repository == "gitlab-org/gitlab-runner"
+
+
+def test_explicit_external_url_without_host_in_repository() -> None:
+    parsed = parse_repository_input(
+        "gitlab-org/gitlab-runner", provider="gitlab", external_url="jihulab.com"
+    )
+
+    assert parsed == ParsedRepository(
+        repository="gitlab-org/gitlab-runner",
+        provider="gitlab",
+        external_url="https://jihulab.com",
+        host="jihulab.com",
+        inferred_from_host=False,
+    )
+
+
+def test_external_url_may_repeat_the_host_of_the_repository() -> None:
+    parsed = parse_repository_input(
+        "jihulab.com/group/project", provider="gitlab", external_url="http://jihulab.com"
+    )
+
+    # Same host, so no conflict; the explicit scheme wins.
+    assert parsed.external_url == "http://jihulab.com"
+
+
+def test_external_url_conflicting_with_repository_host_errors() -> None:
+    with pytest.raises(ValueError, match="does not match --external-url"):
+        parse_repository_input(
+            "jihulab.com/a/b", provider="gitlab", external_url="git.mycorp.com"
+        )
+
+
+def test_external_url_requires_provider() -> None:
+    with pytest.raises(ValueError, match="requires --provider"):
+        parse_repository_input("a/b", external_url="jihulab.com")
+
+
+def test_public_instances_have_no_external_url() -> None:
+    assert parse_repository_input("encode/httpx").external_url is None
+    assert parse_repository_input("gitlab.com/a/b").external_url is None
+    # Spelling out the public instance is not a self-managed one either.
+    assert (
+        parse_repository_input("a/b", provider="gitlab", external_url="gitlab.com").external_url
+        is None
+    )
+
+
+def test_external_url_rejected_for_github() -> None:
+    with pytest.raises(ValueError, match="not supported for github"):
+        parse_repository_input("a/b", provider="github", external_url="github.mycorp.com")

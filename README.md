@@ -35,17 +35,31 @@ export MAILGUN_API_KEY="key-xxx"
 
 **GitHub**：获取标签时采用分层策略，配置了令牌时走 GraphQL API（按 tag 提交时间倒序拉取全量）；未配置令牌或 GraphQL 失败时回退到 REST API 接口（该接口无时间排序，程序会筛选符合版本号形态的标签并按数值取最大）。
 
-**GitLab**：调用 `GET /api/v4/projects/:id/repository/tags`，项目路径会做 URL 编码后作为 `:id`，因此支持多级子组；请求参数固定为 `order_by=updated&sort=desc`，按更新时间倒序翻页拉取全量。公开项目无需令牌；私有项目通过 `PRIVATE-TOKEN` 请求头认证。自建实例把 `[gitlab]` 段的 `external_url` 指向自己的实例地址即可：
+**GitLab**：调用 `GET /api/v4/projects/:id/repository/tags`，项目路径会做 URL 编码后作为 `:id`，因此支持多级子组；请求参数固定为 `order_by=updated&sort=desc`，按更新时间倒序翻页拉取全量。公开项目无需令牌；私有项目通过 `PRIVATE-TOKEN` 请求头认证。
+
+`[gitlab]` 段只针对官方的 gitlab.com 实例，其中只有 `token` 一项。
+
+同一仓库路径在不同 provider、不同实例下互不冲突，会被视为彼此独立的记录。
+
+### self-managed GitLab 实例
+
+自建实例配置在**产品自己**的 `[[products]]` 块里，因此可以同时监控 gitlab.com 和任意多个自建实例：
 
 ```toml
-[gitlab]
-# token = "GITLAB_TOKEN"
-external_url = "https://gitlab.example.com"
+[[products]]
+name = "example"
+provider = "gitlab"
+external_url = "https://jihulab.com"
+token = ""
+repository = "example/project"
+branch = ""
 ```
 
-> 该配置项原名 `base_url`，已重命名为 `external_url`（与 GitLab 自身 `gitlab.rb` 的叫法一致）。旧配置不会被静默忽略：仍写着 `base_url` 时会报错提示改名，详见[配置项重命名](#配置项重命名)。
+- `external_url`：实例的完整 URL，决定去哪台 GitLab 拉 tag。留空表示官方实例（github.com / gitlab.com）；
+- `token`：该实例的访问令牌，可选，留空则匿名访问。令牌只发给自己实例，不会与 `[gitlab]` 段的 gitlab.com 令牌互相串用；
+- `provider = "github"` 的产品不能填 `external_url` / `token`，GitHub Enterprise 暂未支持。
 
-同一仓库路径在不同 provider 下互不冲突，会被视为两条独立记录。
+用 `add` 添加时见[添加公开仓库](#添加公开仓库)一节的 `--external-url` 参数。
 
 ### 新增一个供应商
 
@@ -81,7 +95,8 @@ uv run repo-version-monitor --config config.toml format
 | `products.branch` | 不限分支，跟踪全部标签 |
 | `database.path` | `versions.sqlite3` |
 | `github.token` / `gitlab.token` / `mailgun.api_key` | 视为未设置，回退到环境变量 |
-| `gitlab.external_url` | `https://gitlab.com` |
+| `products.external_url` | 官方实例（github.com / gitlab.com） |
+| `products.token` | 匿名访问该实例 |
 | `mailgun.api_url` | `https://api.mailgun.net/v3` |
 
 `format` 是幂等的，重复执行不会再产生改动。
@@ -126,14 +141,30 @@ uv run repo-version-monitor --config config.toml add git.example.com/group/subgr
 
 - 域名不是已知的公开实例（既不是 `github.com` 也不是 `gitlab.com`）且没传 `--provider` 时直接报错，不会静默按 `github` 处理；
 - `--provider` 与域名推断结果冲突时（如 `--provider github gitlab.com/a/b`）报错退出；
-- 域名只用于判断 provider，不会写进配置。真正请求哪个实例仍由 `[gitlab]` 段的 `external_url` 决定，因此 self-managed 域名与 `external_url` 不一致时会给出提示，记得同步修改：
+- GitHub 侧只支持 `github.com`，GitHub Enterprise 暂未支持。
 
-```toml
-[gitlab]
-external_url = "https://git.example.com"
+#### `--external-url` 参数（self-managed 实例）
+
+添加自建 GitLab 实例上的项目时用 `--external-url` 指定实例地址，同时必须指定 `--provider`——光有地址无法判断该用哪套 API：
+
+```bash
+## 协议可省略，省略时按 https:// 处理
+uv run repo-version-monitor --config config.toml add gitlab-org/gitlab-runner --provider=gitlab --external-url=jihulab.com
+
+## 需要 http:// 时显式写出
+uv run repo-version-monitor --config config.toml add group/sub/project --provider=gitlab --external-url=http://git.example.com
+
+## 私有实例可用 --token 指定令牌，不写则匿名访问
+uv run repo-version-monitor --config config.toml add group/sub/project --provider=gitlab --external-url=git.example.com --token=glpat-xxx
 ```
 
-- GitHub 侧只支持 `github.com`，GitHub Enterprise 暂未支持，填了自建域名会给出提示。
+地址也可以直接写在仓库参数里，效果相同，不必重复写 `--external-url`：
+
+```bash
+uv run repo-version-monitor --config config.toml add https://jihulab.com/gitlab-org/gitlab-runner --provider=gitlab
+```
+
+两者都给且域名不一致时报错退出。`--external-url` 指向公开实例（如 `gitlab.com`）时视为官方实例，不会写进配置。
 
 
 ### 修改追踪分支
@@ -151,10 +182,10 @@ uv run repo-version-monitor --config config.toml edit grafana --branch 13.0
 命令参考：
 
 ```bash
-uv run repo-version-monitor --config config.toml delete --name grafana [--repository grafana/grafana] [--branch 13.0] [--provider gitlab]
+uv run repo-version-monitor --config config.toml delete --name grafana [--repository grafana/grafana] [--branch 13.0] [--provider gitlab] [--external-url jihulab.com]
 ```
 
-支持参数 `--name` 指定，若存在同名时报错退出；支持 `--repository` 精确删除，同仓库多分支时再加 `--branch` 缩小范围，同路径跨供应商时可加 `--provider` 区分，删除后配置哈希会同步更新，数据库中该记录及其事件在下次哈希对比时触发自动清理。
+支持参数 `--name` 指定，若存在同名时报错退出；支持 `--repository` 精确删除，同仓库多分支时再加 `--branch` 缩小范围，同路径跨供应商时可加 `--provider` 区分，同路径跨实例时可加 `--external-url` 区分，删除后配置哈希会同步更新，数据库中该记录及其事件在下次哈希对比时触发自动清理。
 
 ### 查看当前追踪全部仓库列表
 
@@ -164,7 +195,7 @@ uv run repo-version-monitor --config config.toml delete --name grafana [--reposi
 uv run repo-version-monitor --config config.toml list
 ```
 
-默认按产品名排序（不区分大小写，等同 `--sort-by-name`）；加 `--sort-by-repository` 可改为按 repository（次级按 branch）排序，两个参数互斥。输出中的 `PROVIDER` 列标明每条记录来自哪个供应商。
+默认按产品名排序（不区分大小写，等同 `--sort-by-name`）；加 `--sort-by-repository` 可改为按 repository（次级按 branch）排序，两个参数互斥。输出中的 `PROVIDER` 列标明每条记录来自哪个供应商；self-managed 实例上的项目在 `REPOSITORY` 列带上实例域名（如 `jihulab.com/example/project`），与 `add` 的写法一致。
 
 ### 发送测试邮件
 
@@ -210,19 +241,18 @@ uv run --extra dev pytest tests/ -q
 
 ## 其他
 
-### 配置项重命名
+### 配置项变更
 
-两个原先都叫 `base_url` 的配置项已按各自用途改名，避免同名不同义：
-
-| 原名 | 现名 | 作用 |
+| 原写法 | 现写法 | 说明 |
 | --- | --- | --- |
-| `[gitlab] base_url` | `[gitlab] external_url` | self-managed GitLab 实例的外部地址，决定去哪台 GitLab 拉 tag |
-| `[mailgun] base_url` | `[mailgun] api_url` | Mailgun API 端点，EU 账号填 `https://api.eu.mailgun.net/v3` |
+| `[mailgun] base_url` | `[mailgun] api_url` | 同名不同义，按用途改名。EU 账号填 `https://api.eu.mailgun.net/v3` |
+| `[gitlab] base_url` / `[gitlab] external_url` | `[[products]] external_url` | 实例地址下放到产品级，从而支持同时监控多个自建实例 |
 
-旧名不会被静默忽略——那样会悄悄回退到默认值，把请求发去错误的地址。配置里仍写着 `base_url` 时，`load_config` 和 `format` 都会报错并提示新名字（附带原值方便直接复制）：
+旧写法不会被静默忽略——那样会悄悄回退到默认值，把请求发去错误的地址。`load_config` 和 `format` 都会报错并提示新写法（附带原值方便直接复制）：
 
 ```
 [mailgun] base_url has been renamed to api_url; rename the key, e.g. api_url = "https://api.eu.mailgun.net/v3".
+[gitlab] external_url belongs to the product it applies to now; remove it and set external_url = "https://git.example.com" in the [[products]] block of each self-managed project.
 ```
 
 ### 配置变更自动清理
@@ -231,7 +261,9 @@ uv run --extra dev pytest tests/ -q
 
 ### 数据库自动迁移
 
-`products`、`tag_events` 两张表新增了 `provider` 列，主键改为 `(provider, repository, branch)`。旧数据库在下次运行时自动迁移，已有记录一律标记为 `github`，无需手动处理，也不会丢失历史事件。
+`products`、`tag_events` 两张表的主键为 `(provider, external_url, repository, branch)`，其中 `external_url` 为空串表示官方实例——因此同一仓库路径在两个自建实例上是两条独立记录，版本不会互相覆盖。
+
+旧数据库在下次运行时自动迁移，缺失的列按当时的语义补齐（`provider` 记为 `github`，`external_url` 记为官方实例），无需手动处理，也不会丢失历史事件。
 
 ### 容器化部署
 

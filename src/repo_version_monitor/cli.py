@@ -17,22 +17,18 @@ from repo_version_monitor.config import (
     format_config,
     load_config,
     load_products,
-    read_provider_external_url,
     resolve_database_path,
 )
 from repo_version_monitor.db import VersionStore
-from repo_version_monitor.monitor import VersionMonitor
+from repo_version_monitor.monitor import VersionMonitor, product_key
 from repo_version_monitor.providers import DEFAULT_PROVIDER, SUPPORTED_PROVIDERS
-from repo_version_monitor.repo_url import host_mismatch_warning, parse_repository_input
+from repo_version_monitor.repo_url import parse_repository_input, url_host
 
 
 def _sync_config_hash(config_path: Path) -> list[str]:
     """Record the config hash in the DB; prune stale product data if it changed."""
     store = VersionStore(resolve_database_path(config_path))
-    valid_products = {
-        (product.provider, product.repository, product.branch)
-        for product in load_products(config_path)
-    }
+    valid_products = {product_key(product) for product in load_products(config_path)}
     removed = store.sync_config_hash(config_file_hash(config_path), valid_products)
     for key in removed:
         print(f"Removed stale data for {key} (no longer in config).")
@@ -98,6 +94,17 @@ def main() -> None:
         ),
     )
     add_parser.add_argument(
+        "--external-url",
+        help=(
+            "Self-managed instance URL, e.g. https://gitlab.example.com (https:// assumed "
+            "when omitted). Requires --provider."
+        ),
+    )
+    add_parser.add_argument(
+        "--token",
+        help="Token for the self-managed instance; optional, anonymous access when omitted.",
+    )
+    add_parser.add_argument(
         "--branch",
         help="Track a branch line, e.g. v13: only tags starting with 'v13' or '13' are considered.",
     )
@@ -113,6 +120,10 @@ def main() -> None:
         "--provider",
         choices=SUPPORTED_PROVIDERS,
         help="Narrow selection to this provider.",
+    )
+    delete_parser.add_argument(
+        "--external-url",
+        help="Narrow selection to this self-managed instance, e.g. https://gitlab.example.com.",
     )
 
     edit_parser = subparsers.add_parser("edit", help="Edit the branch of an existing product.")
@@ -173,42 +184,48 @@ def main() -> None:
 
     if args.command == "add":
         try:
-            parsed = parse_repository_input(args.repository, args.provider)
+            parsed = parse_repository_input(args.repository, args.provider, args.external_url)
             repository, provider = parsed.repository, parsed.provider
             name = args.name or repository.rsplit("/", 1)[-1]
-            add_product_to_config(args.config, name, repository, args.branch, provider)
+            add_product_to_config(
+                args.config,
+                name,
+                repository,
+                args.branch,
+                provider,
+                parsed.external_url,
+                args.token,
+            )
         except ValueError as exc:
             add_parser.error(str(exc))
         suffix = f", branch {args.branch}" if args.branch else ""
         prefix = f"{provider}:" if provider != DEFAULT_PROVIDER else ""
-        print(f"Added {name} ({prefix}{repository}{suffix}) to {args.config}.")
+        location = f"{url_host(parsed.external_url)}/" if parsed.external_url else ""
+        print(f"Added {name} ({prefix}{location}{repository}{suffix}) to {args.config}.")
         if args.provider is None and parsed.inferred_from_host and provider != DEFAULT_PROVIDER:
             print(f"Provider {provider} inferred from host {parsed.host}.")
-        try:
-            configured_url = read_provider_external_url(args.config, provider)
-        except ValueError as exc:
-            # The product was already written; surface the config problem instead.
-            print(f"Warning: {exc}")
-        else:
-            warning = host_mismatch_warning(parsed, configured_url)
-            if warning:
-                print(f"Warning: {warning}")
+        if parsed.external_url:
+            auth = "token" if args.token else "anonymous access"
+            print(f"Self-managed instance {parsed.external_url} ({auth}).")
         _sync_config_hash(args.config)
         return
 
     if args.command == "delete":
-        product = delete_product(
-            args.config,
-            args.name,
-            args.repository,
-            args.branch if args.branch is not None else _UNSET,
-            args.provider,
-        )
-        label = (
-            f"{product.repository}, branch {product.branch}"
-            if product.branch
-            else product.repository
-        )
+        try:
+            product = delete_product(
+                args.config,
+                args.name,
+                args.repository,
+                args.branch if args.branch is not None else _UNSET,
+                args.provider,
+                args.external_url,
+            )
+        except ValueError as exc:
+            delete_parser.error(str(exc))
+        repository = product.repository
+        if product.external_url:
+            repository = f"{url_host(product.external_url)}/{repository}"
+        label = f"{repository}, branch {product.branch}" if product.branch else repository
         if product.provider != DEFAULT_PROVIDER:
             label = f"{product.provider}:{label}"
         print(f"Deleted {product.name} ({label}) from {args.config}.")
@@ -248,13 +265,19 @@ def main() -> None:
         _sync_config_hash(args.config)
         store = VersionStore(resolve_database_path(args.config))
         stored_by_product = {
-            (product.provider, product.repository, product.branch): product
+            (product.provider, product.external_url, product.repository, product.branch): product
             for product in store.list_products()
         }
 
+        def repository_cell(product) -> str:
+            """Self-managed products are shown the way they are typed into `add`."""
+            if not product.external_url:
+                return product.repository
+            return f"{url_host(product.external_url)}/{product.repository}"
+
         if args.sort_by_repository:
             def sort_key(product):
-                return (product.repository.casefold(), product.branch or "")
+                return (repository_cell(product).casefold(), product.branch or "")
         else:  # default: --sort-by-name
             def sort_key(product):
                 return product.name.casefold()
@@ -262,16 +285,14 @@ def main() -> None:
         id_width = 3 if len(products) >= 100 else 2
         rows = []
         for index, product in enumerate(sorted(products, key=sort_key), start=1):
-            stored = stored_by_product.get(
-                (product.provider, product.repository, product.branch)
-            )
+            stored = stored_by_product.get(product_key(product))
             latest_tag = stored.latest_tag if stored and stored.latest_tag else "(not checked yet)"
             rows.append(
                 (
                     str(index).zfill(id_width),
                     product.name,
                     product.provider,
-                    product.repository,
+                    repository_cell(product),
                     product.branch or "-",
                     latest_tag,
                 )
@@ -304,8 +325,21 @@ def main() -> None:
                 return
             print(f"Checking {blank_count} unchecked product(s).")
         print(f"GitHub token: {config.github.token_source or 'not set (unauthenticated)'}")
-        if any(product.provider == "gitlab" for product in config.products):
+        if any(
+            product.provider == "gitlab" and not product.external_url
+            for product in config.products
+        ):
             print(f"GitLab token: {config.gitlab.token_source or 'not set (unauthenticated)'}")
+        # Self-managed instances authenticate with their own product token.
+        for instance, has_token in sorted(
+            {
+                (product.external_url, bool(product.token))
+                for product in config.products
+                if product.external_url
+            }
+        ):
+            source = "config products.token" if has_token else "not set (unauthenticated)"
+            print(f"{instance} token: {source}")
         if config.mailgun.enabled:
             print(f"Mailgun API key: {config.mailgun.api_key_source or 'not set'}")
         show_progress = args.log_level is None
