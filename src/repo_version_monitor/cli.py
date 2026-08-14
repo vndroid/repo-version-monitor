@@ -353,7 +353,7 @@ def main() -> None:
         print(f"  domain:   {mg.domain}")
         print(f"  from:     {mg.from_email}")
         print(f"  to:       {', '.join(mg.to_emails) or '(empty)'}")
-        print(f"  base_url: {mg.base_url}")
+        print(f"  api_url:  {mg.api_url}")
         print(f"  api_key:  {mg.api_key_source or 'not set'}")
 
         problems = [

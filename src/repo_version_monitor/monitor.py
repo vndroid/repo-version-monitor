@@ -36,7 +36,7 @@ class VersionMonitor:
             api_key=config.mailgun.api_key,
             from_email=config.mailgun.from_email,
             to_emails=config.mailgun.to_emails,
-            base_url=config.mailgun.base_url,
+            api_url=config.mailgun.api_url,
         )
 
     async def check_once(

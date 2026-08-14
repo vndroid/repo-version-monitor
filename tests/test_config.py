@@ -190,6 +190,30 @@ repository = "gitlab-org/gitlab-runner"
         load_config(config_path)
 
 
+def test_load_config_rejects_renamed_mailgun_base_url(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("MAILGUN_API_KEY", "key-xxx")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[mailgun]
+enabled = false
+base_url = "https://api.eu.mailgun.net/v3"
+
+[[products]]
+name = "httpx"
+repository = "encode/httpx"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="renamed to api_url"):
+        load_config(config_path)
+
+    # format must not add api_url next to the outdated key either.
+    with pytest.raises(ValueError, match="renamed to api_url"):
+        format_config(config_path)
+
+
 def test_load_config_prefers_gitlab_env_token(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("GITLAB_TOKEN", "glpat-env")
     config_path = tmp_path / "config.toml"
@@ -511,7 +535,7 @@ external_url = ""
 
 [mailgun]
 enabled = false
-base_url = ""
+api_url = ""
 
 [monitor]
 interval_seconds = 3600
@@ -531,7 +555,7 @@ branch = ""
     assert config.database.path == tmp_path / "versions.sqlite3"
     assert config.github.token is None
     assert config.gitlab.external_url == "https://gitlab.com"
-    assert config.mailgun.base_url == "https://api.mailgun.net/v3"
+    assert config.mailgun.api_url == "https://api.mailgun.net/v3"
     assert config.products[0].provider == "github"
     assert config.products[0].branch is None
 

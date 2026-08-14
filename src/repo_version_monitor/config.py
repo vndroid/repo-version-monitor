@@ -48,7 +48,8 @@ class MailgunConfig:
     api_key: str = field(repr=False)
     from_email: str
     to_emails: list[str]
-    base_url: str
+    #: Mailgun API endpoint, e.g. https://api.mailgun.net/v3.
+    api_url: str
     api_key_source: str | None = None
 
 
@@ -119,7 +120,7 @@ _DEFAULT_SETTINGS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("api_key", '""'),
             ("from_email", '""'),
             ("to_emails", "[]"),
-            ("base_url", '""'),
+            ("api_url", '""'),
         ),
     ),
     ("monitor", (("interval_seconds", "3600"), ("notify_on_first_seen", "false"))),
@@ -127,7 +128,7 @@ _DEFAULT_SETTINGS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
 
 DEFAULT_DATABASE_PATH = "versions.sqlite3"
 DEFAULT_GITLAB_EXTERNAL_URL = "https://gitlab.com"
-DEFAULT_MAILGUN_BASE_URL = "https://api.mailgun.net/v3"
+DEFAULT_MAILGUN_API_URL = "https://api.mailgun.net/v3"
 
 
 @dataclass(frozen=True)
@@ -168,6 +169,8 @@ def _fill_missing_settings(text: str) -> tuple[str, list[str]]:
     appended to their section, missing sections to the end of the file.
     """
     raw = tomllib.loads(text)
+    # Never add the new spelling next to an outdated one.
+    reject_renamed_settings(raw)
     lines = text.splitlines()
     added: list[str] = []
 
@@ -407,19 +410,34 @@ def read_provider_external_url(config_path: Path, provider: str) -> str | None:
 
 def _provider_external_url(raw: dict, provider: str) -> str | None:
     """Read [<provider>] external_url, rejecting the old base_url spelling."""
-    section = raw.get(provider, {})
-    if "base_url" in section:
-        raise ValueError(
-            f"[{provider}] base_url has been renamed to external_url; rename the key, "
-            f'e.g. external_url = "{section["base_url"]}".'
-        )
-    external_url = section.get("external_url")
+    reject_renamed_settings(raw)
+    external_url = raw.get(provider, {}).get("external_url")
     return external_url.rstrip("/") if isinstance(external_url, str) and external_url else None
+
+
+# Settings renamed along the way; the old spelling is rejected with a hint
+# instead of being silently ignored, which would fall back to a default.
+_RENAMED_SETTINGS: tuple[tuple[str, str, str], ...] = (
+    ("gitlab", "base_url", "external_url"),
+    ("mailgun", "base_url", "api_url"),
+)
+
+
+def reject_renamed_settings(raw: dict) -> None:
+    for section, old_key, new_key in _RENAMED_SETTINGS:
+        values = raw.get(section)
+        if isinstance(values, dict) and old_key in values:
+            raise ValueError(
+                f"[{section}] {old_key} has been renamed to {new_key}; rename the key, "
+                f'e.g. {new_key} = "{values[old_key]}".'
+            )
 
 
 def load_config(path: Path) -> AppConfig:
     with path.open("rb") as file:
         raw = tomllib.load(file)
+
+    reject_renamed_settings(raw)
 
     github_raw = raw.get("github", {})
     gitlab_raw = raw.get("gitlab", {})
@@ -501,7 +519,7 @@ def load_config(path: Path) -> AppConfig:
             to_emails=list(
                 mailgun_raw["to_emails"] if mailgun_enabled else mailgun_raw.get("to_emails", [])
             ),
-            base_url=(mailgun_raw.get("base_url") or DEFAULT_MAILGUN_BASE_URL).rstrip("/"),
+            api_url=(mailgun_raw.get("api_url") or DEFAULT_MAILGUN_API_URL).rstrip("/"),
             api_key_source=api_key_source,
         ),
         monitor=MonitorConfig(

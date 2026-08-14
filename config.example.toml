@@ -14,6 +14,7 @@ token = ""
 external_url = "https://gitlab.com"
 
 [mailgun]
+# Official reference: https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun
 # Set false to disable email notifications entirely.
 # When disabled, no other mailgun settings (including the API key) are required.
 enabled = true
@@ -22,8 +23,8 @@ domain = "mg.example.com"
 api_key = "MAILGUN_API_KEY"
 from_email = "Version Monitor <monitor@mg.example.com>"
 to_emails = ["you@example.com"]
-# For EU Mailgun accounts, use "https://api.eu.mailgun.net/v3".
-base_url = "https://api.mailgun.net/v3"
+# Mailgun API endpoint. For EU accounts, use "https://api.eu.mailgun.net/v3".
+api_url = "https://api.mailgun.net/v3"
 
 [monitor]
 interval_seconds = 3600

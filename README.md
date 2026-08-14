@@ -43,7 +43,7 @@ export MAILGUN_API_KEY="key-xxx"
 external_url = "https://gitlab.example.com"
 ```
 
-> 该配置项原名 `base_url`，已重命名为 `external_url`（与 GitLab 自身 `gitlab.rb` 的叫法一致）。旧配置不会被静默忽略：仍写着 `base_url` 时会报错提示改名。
+> 该配置项原名 `base_url`，已重命名为 `external_url`（与 GitLab 自身 `gitlab.rb` 的叫法一致）。旧配置不会被静默忽略：仍写着 `base_url` 时会报错提示改名，详见[配置项重命名](#配置项重命名)。
 
 同一仓库路径在不同 provider 下互不冲突，会被视为两条独立记录。
 
@@ -82,7 +82,7 @@ uv run repo-version-monitor --config config.toml format
 | `database.path` | `versions.sqlite3` |
 | `github.token` / `gitlab.token` / `mailgun.api_key` | 视为未设置，回退到环境变量 |
 | `gitlab.external_url` | `https://gitlab.com` |
-| `mailgun.base_url` | `https://api.mailgun.net/v3` |
+| `mailgun.api_url` | `https://api.mailgun.net/v3` |
 
 `format` 是幂等的，重复执行不会再产生改动。
 
@@ -209,6 +209,21 @@ uv run --extra dev pytest tests/ -q
 ```
 
 ## 其他
+
+### 配置项重命名
+
+两个原先都叫 `base_url` 的配置项已按各自用途改名，避免同名不同义：
+
+| 原名 | 现名 | 作用 |
+| --- | --- | --- |
+| `[gitlab] base_url` | `[gitlab] external_url` | self-managed GitLab 实例的外部地址，决定去哪台 GitLab 拉 tag |
+| `[mailgun] base_url` | `[mailgun] api_url` | Mailgun API 端点，EU 账号填 `https://api.eu.mailgun.net/v3` |
+
+旧名不会被静默忽略——那样会悄悄回退到默认值，把请求发去错误的地址。配置里仍写着 `base_url` 时，`load_config` 和 `format` 都会报错并提示新名字（附带原值方便直接复制）：
+
+```
+[mailgun] base_url has been renamed to api_url; rename the key, e.g. api_url = "https://api.eu.mailgun.net/v3".
+```
 
 ### 配置变更自动清理
 

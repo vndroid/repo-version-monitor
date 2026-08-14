@@ -20,13 +20,14 @@ class MailgunClient:
         api_key: str,
         from_email: str,
         to_emails: list[str],
-        base_url: str = "https://api.mailgun.net/v3",
+        api_url: str = "https://api.mailgun.net/v3",
     ) -> None:
         self.domain = domain
         self.api_key = api_key
         self.from_email = from_email
         self.to_emails = to_emails
-        self.base_url = base_url.rstrip("/")
+        # API endpoint; EU accounts use https://api.eu.mailgun.net/v3.
+        self.api_url = api_url.rstrip("/")
 
     async def send_updates(
         self,
@@ -41,7 +42,7 @@ class MailgunClient:
         subject = f"{subject_prefix}{_subject(updates)}"
         text = _body(updates)
         response = await client.post(
-            f"{self.base_url}/{self.domain}/messages",
+            f"{self.api_url}/{self.domain}/messages",
             auth=("api", self.api_key),
             data={
                 "from": self.from_email,
@@ -55,7 +56,7 @@ class MailgunClient:
     async def send_test(self, client: httpx.AsyncClient) -> httpx.Response:
         """Send a test email; returns the raw response so callers can report the result."""
         return await client.post(
-            f"{self.base_url}/{self.domain}/messages",
+            f"{self.api_url}/{self.domain}/messages",
             auth=("api", self.api_key),
             data={
                 "from": self.from_email,
