@@ -2,14 +2,14 @@ import asyncio
 
 import pytest
 
-from repo_version_monitor.github import (
+from repo_version_monitor.providers import (
     GitHubClient,
     GitHubGraphQLError,
-    GitHubTag,
     filter_tags_for_branch,
     normalize_tag_name,
     pick_latest_version_tag,
 )
+from repo_version_monitor.providers.github import GitHubTag
 
 
 class _FakeResponse:

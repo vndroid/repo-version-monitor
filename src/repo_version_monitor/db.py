@@ -6,20 +6,24 @@ from datetime import UTC, datetime
 from pathlib import Path
 import sqlite3
 
+_DEFAULT_PROVIDER = "github"
+
 _PRODUCTS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS products (
+    provider TEXT NOT NULL DEFAULT 'github',
     repository TEXT NOT NULL,
     branch TEXT NOT NULL DEFAULT '',
     name TEXT NOT NULL,
     latest_tag TEXT,
     updated_at TEXT NOT NULL,
-    PRIMARY KEY (repository, branch)
+    PRIMARY KEY (provider, repository, branch)
 );
 """
 
 _TAG_EVENTS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS tag_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL DEFAULT 'github',
     repository TEXT NOT NULL,
     branch TEXT NOT NULL DEFAULT '',
     old_tag TEXT,
@@ -47,8 +51,11 @@ def _config_branch(db_value: str) -> str | None:
     return db_value.lstrip("@") or None
 
 
-def _label(repository: str, db_branch_value: str) -> str:
-    return f"{repository}{db_branch_value}"
+def _label(provider: str, repository: str, db_branch_value: str) -> str:
+    label = f"{repository}{db_branch_value}"
+    if provider != _DEFAULT_PROVIDER:
+        label = f"{provider}:{label}"
+    return label
 
 
 @dataclass(frozen=True)
@@ -57,6 +64,7 @@ class StoredProduct:
     repository: str
     latest_tag: str | None
     branch: str | None = None
+    provider: str = _DEFAULT_PROVIDER
 
 
 @dataclass(frozen=True)
@@ -67,6 +75,7 @@ class UnnotifiedEvent:
     old_tag: str | None
     new_tag: str
     branch: str | None = None
+    provider: str = _DEFAULT_PROVIDER
 
 
 class VersionStore:
@@ -80,7 +89,7 @@ class VersionStore:
             connection.executescript(_PRODUCTS_SCHEMA + _TAG_EVENTS_SCHEMA + _META_SCHEMA)
 
     def _migrate_legacy(self, connection: sqlite3.Connection) -> None:
-        """Rebuild pre-branch tables, splitting legacy 'repo@branch' keys into columns."""
+        """Rebuild older tables: split legacy 'repo@branch' keys, add provider column."""
         products_cols = [row[1] for row in connection.execute("PRAGMA table_info(products)")]
         if products_cols and "branch" not in products_cols:
             rows = connection.execute(
@@ -92,10 +101,39 @@ class VersionStore:
                 repository, _, branch = row["repository"].partition("@")
                 connection.execute(
                     """
-                    INSERT INTO products (repository, branch, name, latest_tag, updated_at)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO products (provider, repository, branch, name, latest_tag, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (repository, _db_branch(branch or None), row["name"], row["latest_tag"], row["updated_at"]),
+                    (
+                        _DEFAULT_PROVIDER,
+                        repository,
+                        _db_branch(branch or None),
+                        row["name"],
+                        row["latest_tag"],
+                        row["updated_at"],
+                    ),
+                )
+        elif products_cols and "provider" not in products_cols:
+            # Pre-provider schema: everything stored was a GitHub repository.
+            rows = connection.execute(
+                "SELECT repository, branch, name, latest_tag, updated_at FROM products"
+            ).fetchall()
+            connection.execute("DROP TABLE products")
+            connection.executescript(_PRODUCTS_SCHEMA)
+            for row in rows:
+                connection.execute(
+                    """
+                    INSERT INTO products (provider, repository, branch, name, latest_tag, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        _DEFAULT_PROVIDER,
+                        row["repository"],
+                        row["branch"],
+                        row["name"],
+                        row["latest_tag"],
+                        row["updated_at"],
+                    ),
                 )
 
         events_cols = [row[1] for row in connection.execute("PRAGMA table_info(tag_events)")]
@@ -109,11 +147,13 @@ class VersionStore:
                 repository, _, branch = row["repository"].partition("@")
                 connection.execute(
                     """
-                    INSERT INTO tag_events (id, repository, branch, old_tag, new_tag, detected_at, notified_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO tag_events
+                        (id, provider, repository, branch, old_tag, new_tag, detected_at, notified_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         row["id"],
+                        _DEFAULT_PROVIDER,
                         repository,
                         _db_branch(branch or None),
                         row["old_tag"],
@@ -122,13 +162,19 @@ class VersionStore:
                         row["notified_at"],
                     ),
                 )
+        elif events_cols and "provider" not in events_cols:
+            connection.execute(
+                "ALTER TABLE tag_events ADD COLUMN provider TEXT NOT NULL DEFAULT 'github'"
+            )
 
-    def get_product(self, repository: str, branch: str | None = None) -> StoredProduct | None:
+    def get_product(
+        self, repository: str, branch: str | None = None, provider: str = _DEFAULT_PROVIDER
+    ) -> StoredProduct | None:
         with closing(self._connect()) as connection:
             row = connection.execute(
-                "SELECT name, repository, branch, latest_tag FROM products "
-                "WHERE repository = ? AND branch = ?",
-                (repository, _db_branch(branch)),
+                "SELECT name, provider, repository, branch, latest_tag FROM products "
+                "WHERE provider = ? AND repository = ? AND branch = ?",
+                (provider, repository, _db_branch(branch)),
             ).fetchone()
 
         if row is None:
@@ -138,6 +184,7 @@ class VersionStore:
             repository=row["repository"],
             latest_tag=row["latest_tag"],
             branch=_config_branch(row["branch"]),
+            provider=row["provider"],
         )
 
     def list_products(self) -> list[StoredProduct]:
@@ -146,8 +193,8 @@ class VersionStore:
 
         with closing(self._connect()) as connection:
             rows = connection.execute(
-                "SELECT name, repository, branch, latest_tag FROM products "
-                "ORDER BY name, repository, branch"
+                "SELECT name, provider, repository, branch, latest_tag FROM products "
+                "ORDER BY name, provider, repository, branch"
             ).fetchall()
 
         return [
@@ -156,37 +203,48 @@ class VersionStore:
                 repository=row["repository"],
                 latest_tag=row["latest_tag"],
                 branch=_config_branch(row["branch"]),
+                provider=row["provider"],
             )
             for row in rows
         ]
 
     def upsert_product(
-        self, name: str, repository: str, latest_tag: str | None, branch: str | None = None
+        self,
+        name: str,
+        repository: str,
+        latest_tag: str | None,
+        branch: str | None = None,
+        provider: str = _DEFAULT_PROVIDER,
     ) -> None:
         now = _now()
         with closing(self._connect()) as connection, connection:
             connection.execute(
                 """
-                INSERT INTO products (repository, branch, name, latest_tag, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(repository, branch) DO UPDATE SET
+                INSERT INTO products (provider, repository, branch, name, latest_tag, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(provider, repository, branch) DO UPDATE SET
                     name = excluded.name,
                     latest_tag = excluded.latest_tag,
                     updated_at = excluded.updated_at
                 """,
-                (repository, _db_branch(branch), name, latest_tag, now),
+                (provider, repository, _db_branch(branch), name, latest_tag, now),
             )
 
     def record_event(
-        self, repository: str, old_tag: str | None, new_tag: str, branch: str | None = None
+        self,
+        repository: str,
+        old_tag: str | None,
+        new_tag: str,
+        branch: str | None = None,
+        provider: str = _DEFAULT_PROVIDER,
     ) -> int:
         with closing(self._connect()) as connection, connection:
             cursor = connection.execute(
                 """
-                INSERT INTO tag_events (repository, branch, old_tag, new_tag, detected_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO tag_events (provider, repository, branch, old_tag, new_tag, detected_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (repository, _db_branch(branch), old_tag, new_tag, _now()),
+                (provider, repository, _db_branch(branch), old_tag, new_tag, _now()),
             )
             return int(cursor.lastrowid)
 
@@ -197,11 +255,13 @@ class VersionStore:
         with closing(self._connect()) as connection:
             rows = connection.execute(
                 """
-                SELECT e.id, e.repository, e.branch, e.old_tag, e.new_tag,
+                SELECT e.id, e.provider, e.repository, e.branch, e.old_tag, e.new_tag,
                        COALESCE(p.name, e.repository) AS product_name
                 FROM tag_events AS e
                 LEFT JOIN products AS p
-                    ON p.repository = e.repository AND p.branch = e.branch
+                    ON p.provider = e.provider
+                    AND p.repository = e.repository
+                    AND p.branch = e.branch
                 WHERE e.notified_at IS NULL
                 ORDER BY e.id
                 """
@@ -215,6 +275,7 @@ class VersionStore:
                 old_tag=row["old_tag"],
                 new_tag=row["new_tag"],
                 branch=_config_branch(row["branch"]),
+                provider=row["provider"],
             )
             for row in rows
         ]
@@ -227,11 +288,11 @@ class VersionStore:
             )
 
     def sync_config_hash(
-        self, config_hash: str, valid_products: set[tuple[str, str | None]]
+        self, config_hash: str, valid_products: set[tuple[str, str, str | None]]
     ) -> list[str]:
         """Record the config hash; on change, drop data for products no longer configured.
 
-        valid_products holds (repository, branch) pairs from the config.
+        valid_products holds (provider, repository, branch) triples from the config.
         Returns human-readable labels of the removed entries.
         """
         self.initialize()
@@ -265,25 +326,35 @@ class VersionStore:
                 (key, value),
             )
 
-    def prune_products_not_in(self, valid_products: set[tuple[str, str | None]]) -> list[str]:
-        """Delete products (and their tag events) not configured anymore."""
+    def prune_products_not_in(
+        self, valid_products: set[tuple[str, str, str | None]]
+    ) -> list[str]:
+        """Delete products (and their tag events) not configured anymore.
+
+        valid_products holds (provider, repository, branch) triples.
+        """
         with closing(self._connect()) as connection, connection:
-            rows = connection.execute("SELECT repository, branch FROM products").fetchall()
+            rows = connection.execute(
+                "SELECT provider, repository, branch FROM products"
+            ).fetchall()
             removed = [
-                (row["repository"], row["branch"])
+                (row["provider"], row["repository"], row["branch"])
                 for row in rows
-                if (row["repository"], _config_branch(row["branch"])) not in valid_products
+                if (row["provider"], row["repository"], _config_branch(row["branch"]))
+                not in valid_products
             ]
-            for repository, branch in removed:
+            for provider, repository, branch in removed:
                 connection.execute(
-                    "DELETE FROM tag_events WHERE repository = ? AND branch = ?",
-                    (repository, branch),
+                    "DELETE FROM tag_events "
+                    "WHERE provider = ? AND repository = ? AND branch = ?",
+                    (provider, repository, branch),
                 )
                 connection.execute(
-                    "DELETE FROM products WHERE repository = ? AND branch = ?",
-                    (repository, branch),
+                    "DELETE FROM products "
+                    "WHERE provider = ? AND repository = ? AND branch = ?",
+                    (provider, repository, branch),
                 )
-        return [_label(repository, branch) for repository, branch in removed]
+        return [_label(provider, repository, branch) for provider, repository, branch in removed]
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path)

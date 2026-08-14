@@ -42,10 +42,10 @@ repository = "fastapi/fastapi"
     main()
 
     lines = capsys.readouterr().out.splitlines()
-    assert lines[0].split() == ["ID", "NAME", "REPOSITORY", "BRANCH", "LATEST"]
+    assert lines[0].split() == ["ID", "NAME", "PROVIDER", "REPOSITORY", "BRANCH", "LATEST"]
     # case-insensitive sort by name: FastAPI before zlib, ids zero-padded from 01
-    assert lines[1].split()[:4] == ["01", "FastAPI", "fastapi/fastapi", "-"]
-    assert lines[2].split()[:4] == ["02", "zlib", "madler/zlib", "-"]
+    assert lines[1].split()[:5] == ["01", "FastAPI", "github", "fastapi/fastapi", "-"]
+    assert lines[2].split()[:5] == ["02", "zlib", "github", "madler/zlib", "-"]
 
 
 def test_list_sort_by_repository(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -72,5 +72,5 @@ repository = "Aaa/first"
 
     lines = capsys.readouterr().out.splitlines()
     # case-insensitive sort by repository, not by name
-    assert lines[1].split()[:3] == ["01", "zzz", "Aaa/first"]
-    assert lines[2].split()[:3] == ["02", "abc", "zzz/last"]
+    assert lines[1].split()[:4] == ["01", "zzz", "github", "Aaa/first"]
+    assert lines[2].split()[:4] == ["02", "abc", "github", "zzz/last"]

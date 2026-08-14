@@ -21,13 +21,15 @@ from repo_version_monitor.config import (
 )
 from repo_version_monitor.db import VersionStore
 from repo_version_monitor.monitor import VersionMonitor
+from repo_version_monitor.providers import DEFAULT_PROVIDER, SUPPORTED_PROVIDERS
 
 
 def _sync_config_hash(config_path: Path) -> list[str]:
     """Record the config hash in the DB; prune stale product data if it changed."""
     store = VersionStore(resolve_database_path(config_path))
     valid_products = {
-        (product.repository, product.branch) for product in load_products(config_path)
+        (product.provider, product.repository, product.branch)
+        for product in load_products(config_path)
     }
     removed = store.sync_config_hash(config_file_hash(config_path), valid_products)
     for key in removed:
@@ -53,7 +55,9 @@ def _render_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> list
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Monitor GitHub tags and notify via Mailgun.")
+    parser = argparse.ArgumentParser(
+        description="Monitor GitHub/GitLab tags and notify via Mailgun."
+    )
     parser.add_argument("--config", default="config.toml", type=Path, help="Path to TOML config.")
     parser.add_argument(
         "--log-level",
@@ -73,9 +77,18 @@ def main() -> None:
         help="Only check products still shown as '(not checked yet)' in list.",
     )
 
-    add_parser = subparsers.add_parser("add", help="Add a GitHub repository to the config.")
-    add_parser.add_argument("repository", help="GitHub repository in owner/name format.")
+    add_parser = subparsers.add_parser("add", help="Add a repository to the config.")
+    add_parser.add_argument(
+        "repository",
+        help="Repository path, e.g. owner/name (GitLab subgroups allowed: group/sub/project).",
+    )
     add_parser.add_argument("--name", help="Display name. Defaults to the repository name.")
+    add_parser.add_argument(
+        "--provider",
+        choices=SUPPORTED_PROVIDERS,
+        default=DEFAULT_PROVIDER,
+        help="Code-hosting provider of the repository (default: github).",
+    )
     add_parser.add_argument(
         "--branch",
         help="Track a branch line, e.g. v13: only tags starting with 'v13' or '13' are considered.",
@@ -87,6 +100,11 @@ def main() -> None:
     delete_parser.add_argument(
         "--branch",
         help="Narrow selection to this branch; pass an empty string for entries without one.",
+    )
+    delete_parser.add_argument(
+        "--provider",
+        choices=SUPPORTED_PROVIDERS,
+        help="Narrow selection to this provider.",
     )
 
     edit_parser = subparsers.add_parser("edit", help="Edit the branch of an existing product.")
@@ -147,9 +165,10 @@ def main() -> None:
 
     if args.command == "add":
         name = args.name or args.repository.rsplit("/", 1)[-1]
-        add_product_to_config(args.config, name, args.repository, args.branch)
+        add_product_to_config(args.config, name, args.repository, args.branch, args.provider)
         suffix = f", branch {args.branch}" if args.branch else ""
-        print(f"Added {name} ({args.repository}{suffix}) to {args.config}.")
+        prefix = f"{args.provider}:" if args.provider != DEFAULT_PROVIDER else ""
+        print(f"Added {name} ({prefix}{args.repository}{suffix}) to {args.config}.")
         _sync_config_hash(args.config)
         return
 
@@ -159,12 +178,15 @@ def main() -> None:
             args.name,
             args.repository,
             args.branch if args.branch is not None else _UNSET,
+            args.provider,
         )
         label = (
             f"{product.repository}, branch {product.branch}"
             if product.branch
             else product.repository
         )
+        if product.provider != DEFAULT_PROVIDER:
+            label = f"{product.provider}:{label}"
         print(f"Deleted {product.name} ({label}) from {args.config}.")
         _sync_config_hash(args.config)
         return
@@ -198,7 +220,7 @@ def main() -> None:
         _sync_config_hash(args.config)
         store = VersionStore(resolve_database_path(args.config))
         stored_by_product = {
-            (product.repository, product.branch): product
+            (product.provider, product.repository, product.branch): product
             for product in store.list_products()
         }
 
@@ -212,19 +234,24 @@ def main() -> None:
         id_width = 3 if len(products) >= 100 else 2
         rows = []
         for index, product in enumerate(sorted(products, key=sort_key), start=1):
-            stored = stored_by_product.get((product.repository, product.branch))
+            stored = stored_by_product.get(
+                (product.provider, product.repository, product.branch)
+            )
             latest_tag = stored.latest_tag if stored and stored.latest_tag else "(not checked yet)"
             rows.append(
                 (
                     str(index).zfill(id_width),
                     product.name,
+                    product.provider,
                     product.repository,
                     product.branch or "-",
                     latest_tag,
                 )
             )
 
-        for line in _render_table(("ID", "NAME", "REPOSITORY", "BRANCH", "LATEST"), rows):
+        for line in _render_table(
+            ("ID", "NAME", "PROVIDER", "REPOSITORY", "BRANCH", "LATEST"), rows
+        ):
             print(line)
         return
 
@@ -249,6 +276,8 @@ def main() -> None:
                 return
             print(f"Checking {blank_count} unchecked product(s).")
         print(f"GitHub token: {config.github.token_source or 'not set (unauthenticated)'}")
+        if any(product.provider == "gitlab" for product in config.products):
+            print(f"GitLab token: {config.gitlab.token_source or 'not set (unauthenticated)'}")
         if config.mailgun.enabled:
             print(f"Mailgun API key: {config.mailgun.api_key_source or 'not set'}")
         show_progress = args.log_level is None

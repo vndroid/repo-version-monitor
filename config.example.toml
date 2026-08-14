@@ -6,6 +6,13 @@ path = "versions.sqlite3"
 token = "GITHUB_TOKEN"
 per_page = 10
 
+[gitlab]
+# Optional. You can also set GITLAB_TOKEN in the environment.
+# Only needed for private projects or self-hosted instances with restrictions.
+# token = "GITLAB_TOKEN"
+# For self-hosted GitLab, point base_url at your instance.
+base_url = "https://gitlab.com"
+
 [mailgun]
 # Set false to disable email notifications entirely.
 # When disabled, no other mailgun settings (including the API key) are required.
@@ -30,5 +37,13 @@ branch = ""
 [[products]]
 name = "FastAPI"
 repository = "fastapi/fastapi"
+branch = ""
+
+# provider defaults to "github" when omitted; set it to "gitlab" for GitLab
+# projects. GitLab paths may include subgroups: group/subgroup/project.
+[[products]]
+name = "gitlab-runner"
+provider = "gitlab"
+repository = "gitlab-org/gitlab-runner"
 branch = ""
 

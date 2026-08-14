@@ -88,6 +88,133 @@ def test_add_product_accepts_dotted_name(tmp_path: Path) -> None:
     assert load_products(config_path)[0].name == "zlib.net"
 
 
+def test_add_gitlab_product_round_trip(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    add_product_to_config(config_path, "runner", "gitlab-org/gitlab-runner", provider="gitlab")
+    products = load_products(config_path)
+
+    assert products[0].provider == "gitlab"
+    # provider is written explicitly for non-github entries only
+    assert 'provider = "gitlab"' in config_path.read_text(encoding="utf-8")
+
+
+def test_github_products_omit_provider_key(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    add_product_to_config(config_path, "httpx", "encode/httpx")
+
+    assert "provider" not in config_path.read_text(encoding="utf-8")
+    assert load_products(config_path)[0].provider == "github"
+
+
+def test_same_repository_allowed_across_providers(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    add_product_to_config(config_path, "hub", "acme/tool")
+    add_product_to_config(config_path, "lab", "acme/tool", provider="gitlab")
+    with pytest.raises(ValueError, match="already configured"):
+        add_product_to_config(config_path, "lab2", "acme/tool", provider="gitlab")
+
+    assert len(load_products(config_path)) == 2
+
+
+def test_gitlab_allows_nested_subgroups_github_does_not(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    add_product_to_config(config_path, "proj", "group/subgroup/project", provider="gitlab")
+    with pytest.raises(ValueError, match="Invalid repository"):
+        add_product_to_config(config_path, "bad", "group/subgroup/project")
+
+
+def test_add_product_rejects_unknown_provider(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Invalid provider"):
+        add_product_to_config(config_path, "x", "a/b", provider="bitbucket")
+
+
+def test_load_config_reads_gitlab_section(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[mailgun]
+enabled = false
+
+[gitlab]
+token = "glpat-inline"
+base_url = "https://gitlab.example.com/"
+
+[[products]]
+name = "runner"
+provider = "gitlab"
+repository = "gitlab-org/gitlab-runner"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.gitlab.token == "glpat-inline"
+    assert config.gitlab.token_source == "config gitlab.token"
+    assert config.gitlab.base_url == "https://gitlab.example.com"
+    assert config.products[0].provider == "gitlab"
+
+
+def test_load_config_prefers_gitlab_env_token(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GITLAB_TOKEN", "glpat-env")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[mailgun]
+enabled = false
+
+[gitlab]
+token = "glpat-inline"
+
+[[products]]
+name = "httpx"
+repository = "encode/httpx"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.gitlab.token == "glpat-env"
+    assert config.gitlab.token_source == "env GITLAB_TOKEN"
+
+
+def test_format_preserves_provider(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[[products]]
+name = "runner"
+provider = "gitlab"
+repository = "gitlab-org/gitlab-runner"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    assert format_config(config_path) == "formatted"
+
+    expected = """
+[[products]]
+name = "runner"
+provider = "gitlab"
+repository = "gitlab-org/gitlab-runner"
+branch = ""
+""".lstrip()
+    assert config_path.read_text(encoding="utf-8") == expected
+
+
 def test_load_products_rejects_invalid_name_in_config(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text(

@@ -7,14 +7,15 @@ import httpx
 
 from repo_version_monitor.config import AppConfig, config_file_hash
 from repo_version_monitor.db import VersionStore
-from repo_version_monitor.github import (
+from repo_version_monitor.mailgun import MailgunClient, VersionUpdate
+from repo_version_monitor.providers import (
     GitHubClient,
-    GitHubGraphQLError,
+    GitLabClient,
+    TagProvider,
     filter_tags_for_branch,
     normalize_tag_name,
     pick_latest_version_tag,
 )
-from repo_version_monitor.mailgun import MailgunClient, VersionUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,12 @@ class VersionMonitor:
         self.config = config
         self.store = VersionStore(config.database.path)
         self.github = GitHubClient(config.github.token, config.github.per_page)
+        self.gitlab = GitLabClient(config.gitlab.token, config.gitlab.base_url)
+        # One client per provider; add new providers here.
+        self.providers: dict[str, TagProvider] = {
+            "github": self.github,
+            "gitlab": self.gitlab,
+        }
         self.mailgun = MailgunClient(
             domain=config.mailgun.domain,
             api_key=config.mailgun.api_key,
@@ -43,7 +50,10 @@ class VersionMonitor:
         self.store.initialize()
         removed = self.store.sync_config_hash(
             config_file_hash(self.config.source_path),
-            {(product.repository, product.branch) for product in self.config.products},
+            {
+                (product.provider, product.repository, product.branch)
+                for product in self.config.products
+            },
         )
         for key in removed:
             logger.info("Removed stale data for %s (no longer in config).", key)
@@ -60,13 +70,13 @@ class VersionMonitor:
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             for product in products:
-                repo, branch = product.repository, product.branch
+                repo, branch, provider = product.repository, product.branch, product.provider
                 label = f"{repo}@{branch}" if branch else repo
-                # Tiered fetch: GraphQL (date-ordered) when a token is configured,
-                # falling back to the REST tags endpoint otherwise or on failure.
+                if provider != "github":
+                    label = f"{provider}:{label}"
                 # One failing repository must not abort checks for the rest.
                 try:
-                    tags = await self._fetch_tags(client, repo, label)
+                    tags = await self.providers[provider].fetch_tags(client, repo)
                 except httpx.HTTPError:
                     logger.exception("Failed to fetch tags for %s", label)
                     continue
@@ -88,7 +98,7 @@ class VersionMonitor:
                 # Store and compare without the 'v' prefix so repositories that
                 # switch between 'v1.2.3' and '1.2.3' styles don't cause noise.
                 latest_tag = normalize_tag_name(latest.name)
-                stored = self.store.get_product(repo, branch)
+                stored = self.store.get_product(repo, branch, provider)
                 stored_tag = (
                     normalize_tag_name(stored.latest_tag)
                     if stored and stored.latest_tag
@@ -98,15 +108,17 @@ class VersionMonitor:
                 if stored is None:
                     # Persist immediately so a later mail failure never causes
                     # duplicate events for the same tag on the next cycle.
-                    self.store.upsert_product(product.name, repo, latest_tag, branch)
+                    self.store.upsert_product(product.name, repo, latest_tag, branch, provider)
                     if self.config.monitor.notify_on_first_seen:
-                        event_ids.append(self.store.record_event(repo, None, latest_tag, branch))
+                        event_ids.append(
+                            self.store.record_event(repo, None, latest_tag, branch, provider)
+                        )
                         updates.append(VersionUpdate(product.name, repo, None, latest_tag))
                     logger.info("Initialized %s at %s", label, latest_tag)
                 elif stored_tag != latest_tag:
-                    self.store.upsert_product(product.name, repo, latest_tag, branch)
+                    self.store.upsert_product(product.name, repo, latest_tag, branch, provider)
                     event_ids.append(
-                        self.store.record_event(repo, stored_tag, latest_tag, branch)
+                        self.store.record_event(repo, stored_tag, latest_tag, branch, provider)
                     )
                     updates.append(
                         VersionUpdate(product.name, repo, stored_tag, latest_tag)
@@ -118,7 +130,7 @@ class VersionMonitor:
                         latest_tag,
                     )
                 else:
-                    self.store.upsert_product(product.name, repo, latest_tag, branch)
+                    self.store.upsert_product(product.name, repo, latest_tag, branch, provider)
                     logger.info("%s is unchanged at %s", label, latest_tag)
 
             if updates:
@@ -136,20 +148,8 @@ class VersionMonitor:
         return updates
 
     def _has_latest_tag(self, product) -> bool:
-        stored = self.store.get_product(product.repository, product.branch)
+        stored = self.store.get_product(product.repository, product.branch, product.provider)
         return stored is not None and bool(stored.latest_tag)
-
-    async def _fetch_tags(self, client: httpx.AsyncClient, repo: str, label: str) -> list:
-        if self.github.token:
-            try:
-                return await self.github.fetch_all_tags_graphql(client, repo)
-            except (httpx.HTTPError, GitHubGraphQLError):
-                logger.warning(
-                    "GraphQL tag fetch failed for %s; falling back to REST.",
-                    label,
-                    exc_info=True,
-                )
-        return await self.github.fetch_all_tags(client, repo)
 
     async def resend_unnotified(self) -> list[VersionUpdate]:
         """Resend email for recorded events whose notification never went out."""

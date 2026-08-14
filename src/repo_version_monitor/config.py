@@ -8,9 +8,13 @@ from pathlib import Path
 import re
 import tomllib
 
+from repo_version_monitor.providers import DEFAULT_PROVIDER, SUPPORTED_PROVIDERS
+
 logger = logging.getLogger(__name__)
 
 _REPOSITORY_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+# GitLab projects may be nested under subgroups: group/subgroup/project.
+_GITLAB_REPOSITORY_PATTERN = re.compile(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+")
 _PRODUCT_NAME_PATTERN = re.compile(r"[A-Za-z0-9_.-]+")
 
 
@@ -19,12 +23,20 @@ class ProductConfig:
     name: str
     repository: str
     branch: str | None = None
+    provider: str = DEFAULT_PROVIDER
 
 
 @dataclass(frozen=True)
 class GitHubConfig:
     token: str | None = field(repr=False)
     per_page: int
+    token_source: str | None = None
+
+
+@dataclass(frozen=True)
+class GitLabConfig:
+    token: str | None = field(repr=False)
+    base_url: str
     token_source: str | None = None
 
 
@@ -54,6 +66,7 @@ class MonitorConfig:
 class AppConfig:
     database: DatabaseConfig
     github: GitHubConfig
+    gitlab: GitLabConfig
     mailgun: MailgunConfig
     monitor: MonitorConfig
     products: list[ProductConfig]
@@ -65,27 +78,29 @@ def config_file_hash(path: Path) -> str:
 
 
 def add_product_to_config(
-    path: Path, name: str, repository: str, branch: str | None = None
+    path: Path,
+    name: str,
+    repository: str,
+    branch: str | None = None,
+    provider: str = DEFAULT_PROVIDER,
 ) -> None:
     validate_product_name(name)
-    validate_repository(repository)
+    validate_provider(provider)
+    validate_repository(repository, provider)
     if branch is not None:
         validate_branch(branch)
     products = load_products(path)
     if any(
-        product.repository == repository and product.branch == branch for product in products
+        product.provider == provider
+        and product.repository == repository
+        and product.branch == branch
+        for product in products
     ):
         label = f"{repository} (branch {branch})" if branch else repository
         raise ValueError(f"{label} is already configured.")
 
     with path.open("a", encoding="utf-8") as file:
-        file.write(
-            "\n"
-            "[[products]]\n"
-            f'name = "{_escape_toml_string(name)}"\n'
-            f'repository = "{repository}"\n'
-            f'branch = "{_escape_toml_string(branch or "")}"\n'
-        )
+        file.write("\n" + _product_block(ProductConfig(name, repository, branch, provider)))
 
 
 def format_config(path: Path, template_path: Path | None = None) -> str:
@@ -129,23 +144,28 @@ def edit_product_branch(
         scope = f" with repository {repository}" if repository else ""
         raise ValueError(f"No product named {name!r}{scope}.")
     if len(matches) > 1:
-        candidates = ", ".join(
-            f"{p.repository}@{p.branch}" if p.branch else p.repository for p in matches
-        )
+        candidates = ", ".join(_product_label(p) for p in matches)
         raise ValueError(
             f"Multiple products named {name!r}: {candidates}. Use --repository to disambiguate."
         )
 
     target = matches[0]
     if any(
-        product.repository == target.repository and product.branch == branch
+        product.provider == target.provider
+        and product.repository == target.repository
+        and product.branch == branch
         for product in products
         if product is not target
     ):
         label = f"{target.repository} (branch {branch})" if branch else target.repository
         raise ValueError(f"{label} is already configured.")
 
-    updated = ProductConfig(name=target.name, repository=target.repository, branch=branch)
+    updated = ProductConfig(
+        name=target.name,
+        repository=target.repository,
+        branch=branch,
+        provider=target.provider,
+    )
     _write_products(path, [updated if product is target else product for product in products])
     return target.branch, updated
 
@@ -158,11 +178,13 @@ def delete_product(
     name: str | None = None,
     repository: str | None = None,
     branch: object = _UNSET,
+    provider: str | None = None,
 ) -> ProductConfig:
     """Delete exactly one product matching the given selectors.
 
     Raises when nothing matches or when the selection is ambiguous.
     branch left as _UNSET means "any branch"; None/"" matches entries without one.
+    provider=None matches any provider.
     """
     if name is None and repository is None:
         raise ValueError("Specify --name or --repository.")
@@ -176,18 +198,18 @@ def delete_product(
             return False
         if branch is not _UNSET and product.branch != (branch or None):
             return False
+        if provider is not None and product.provider != provider:
+            return False
         return True
 
     matches = [product for product in products if _matches(product)]
     if not matches:
         raise ValueError("No matching product found.")
     if len(matches) > 1:
-        candidates = ", ".join(
-            f"{p.repository}@{p.branch}" if p.branch else p.repository for p in matches
-        )
+        candidates = ", ".join(_product_label(p) for p in matches)
         raise ValueError(
             f"Multiple products match: {candidates}. "
-            "Use --repository (and --branch) to select exactly one."
+            "Use --repository (with --branch or --provider) to select exactly one."
         )
 
     target = matches[0]
@@ -195,19 +217,35 @@ def delete_product(
     return target
 
 
+def _product_label(product: ProductConfig) -> str:
+    label = (
+        f"{product.repository}@{product.branch}" if product.branch else product.repository
+    )
+    if product.provider != DEFAULT_PROVIDER:
+        label = f"{product.provider}:{label}"
+    return label
+
+
+def _product_block(product: ProductConfig) -> str:
+    """Render one [[products]] block; provider is only written when not github."""
+    provider_line = (
+        f'provider = "{product.provider}"\n' if product.provider != DEFAULT_PROVIDER else ""
+    )
+    return (
+        "[[products]]\n"
+        f'name = "{_escape_toml_string(product.name)}"\n'
+        + provider_line
+        + f'repository = "{product.repository}"\n'
+        f'branch = "{_escape_toml_string(product.branch or "")}"\n'
+    )
+
+
 def _write_products(path: Path, products: list[ProductConfig]) -> None:
     """Rewrite all [[products]] blocks (normalized), keeping other content unchanged."""
     text = path.read_text(encoding="utf-8")
     remainder = _strip_product_blocks(text).rstrip("\n")
 
-    blocks = []
-    for product in products:
-        blocks.append(
-            "[[products]]\n"
-            f'name = "{_escape_toml_string(product.name)}"\n'
-            f'repository = "{product.repository}"\n'
-            f'branch = "{_escape_toml_string(product.branch or "")}"\n'
-        )
+    blocks = [_product_block(product) for product in products]
 
     parts = [part for part in (remainder, *blocks) if part]
     path.write_text("\n\n".join(part.rstrip("\n") for part in parts) + "\n", encoding="utf-8")
@@ -239,11 +277,16 @@ def load_products(path: Path) -> list[ProductConfig]:
         repository = item["repository"]
         # An empty branch string means "no branch" (written by `format`).
         branch = item.get("branch") or None
+        # A missing/empty provider means GitHub, keeping old configs valid.
+        provider = item.get("provider") or DEFAULT_PROVIDER
         validate_product_name(name)
-        validate_repository(repository)
+        validate_provider(provider)
+        validate_repository(repository, provider)
         if branch is not None:
             validate_branch(branch)
-        products.append(ProductConfig(name=name, repository=repository, branch=branch))
+        products.append(
+            ProductConfig(name=name, repository=repository, branch=branch, provider=provider)
+        )
     return products
 
 
@@ -262,6 +305,7 @@ def load_config(path: Path) -> AppConfig:
         raw = tomllib.load(file)
 
     github_raw = raw.get("github", {})
+    gitlab_raw = raw.get("gitlab", {})
     mailgun_raw = raw.get("mailgun", {})
     database_raw = raw.get("database", {})
     monitor_raw = raw.get("monitor", {})
@@ -300,12 +344,33 @@ def load_config(path: Path) -> AppConfig:
     if not products:
         raise ValueError("At least one [[products]] entry is required.")
 
+    gitlab_token_env = gitlab_raw.get("token_env", "GITLAB_TOKEN")
+    # Priority: environment variable first, then the inline gitlab.token value.
+    env_gitlab_token = os.getenv(gitlab_token_env)
+    gitlab_token = env_gitlab_token or gitlab_raw.get("token")
+    gitlab_token_source = (
+        f"env {gitlab_token_env}"
+        if env_gitlab_token
+        else ("config gitlab.token" if gitlab_token else None)
+    )
+    if any(product.provider == "gitlab" for product in products) and not gitlab_token:
+        logger.info(
+            "No GitLab token found (gitlab.token unset and env %s is empty); "
+            "requests are unauthenticated and only public projects are reachable.",
+            gitlab_token_env,
+        )
+
     return AppConfig(
         database=DatabaseConfig(path=db_path),
         github=GitHubConfig(
             token=token,
             per_page=min(max(int(github_raw.get("per_page", 10)), 1), 100),
             token_source=token_source,
+        ),
+        gitlab=GitLabConfig(
+            token=gitlab_token,
+            base_url=gitlab_raw.get("base_url", "https://gitlab.com").rstrip("/"),
+            token_source=gitlab_token_source,
         ),
         mailgun=MailgunConfig(
             enabled=mailgun_enabled,
@@ -346,7 +411,21 @@ def validate_branch(branch: str) -> None:
         )
 
 
-def validate_repository(repository: str) -> None:
+def validate_provider(provider: str) -> None:
+    if provider not in SUPPORTED_PROVIDERS:
+        supported = ", ".join(SUPPORTED_PROVIDERS)
+        raise ValueError(f"Invalid provider {provider!r}: expected one of {supported}.")
+
+
+def validate_repository(repository: str, provider: str = DEFAULT_PROVIDER) -> None:
+    if provider == "gitlab":
+        # GitLab allows nested groups: group/subgroup/project.
+        if not _GITLAB_REPOSITORY_PATTERN.fullmatch(repository):
+            raise ValueError(
+                f"Invalid repository {repository!r}: expected 'namespace/project' "
+                "(subgroups allowed) with only letters, digits, '-', '_' and '.'."
+            )
+        return
     if not _REPOSITORY_PATTERN.fullmatch(repository):
         raise ValueError(
             f"Invalid repository {repository!r}: expected 'owner/name' with only "
