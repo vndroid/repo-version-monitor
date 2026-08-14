@@ -300,6 +300,23 @@ def resolve_database_path(config_path: Path) -> Path:
     return db_path
 
 
+def read_provider_base_url(config_path: Path, provider: str) -> str | None:
+    """Return the base_url configured for a provider, or None when unset.
+
+    Reads the raw TOML only, so it works before the full config is valid
+    (e.g. during `add`, when Mailgun settings may still be missing).
+    """
+    if provider == DEFAULT_PROVIDER:
+        return None
+    try:
+        with config_path.open("rb") as file:
+            raw = tomllib.load(file)
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    base_url = raw.get(provider, {}).get("base_url")
+    return base_url.rstrip("/") if isinstance(base_url, str) and base_url else None
+
+
 def load_config(path: Path) -> AppConfig:
     with path.open("rb") as file:
         raw = tomllib.load(file)

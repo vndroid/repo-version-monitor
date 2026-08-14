@@ -19,8 +19,25 @@ from repo_version_monitor.providers.gitlab import GitLabClient
 DEFAULT_PROVIDER = "github"
 SUPPORTED_PROVIDERS = ("github", "gitlab")
 
+# Public hostnames that identify a provider on their own. Self-hosted
+# instances use arbitrary domains, so those need an explicit --provider.
+PROVIDER_HOSTS = {
+    "github.com": "github",
+    "www.github.com": "github",
+    "gitlab.com": "gitlab",
+    "www.gitlab.com": "gitlab",
+}
+
+# Where each provider lives when no host is given.
+DEFAULT_PROVIDER_HOSTS = {
+    "github": "github.com",
+    "gitlab": "gitlab.com",
+}
+
 __all__ = [
     "DEFAULT_PROVIDER",
+    "DEFAULT_PROVIDER_HOSTS",
+    "PROVIDER_HOSTS",
     "SUPPORTED_PROVIDERS",
     "GitHubClient",
     "GitHubGraphQLError",

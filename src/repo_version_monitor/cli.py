@@ -17,11 +17,13 @@ from repo_version_monitor.config import (
     format_config,
     load_config,
     load_products,
+    read_provider_base_url,
     resolve_database_path,
 )
 from repo_version_monitor.db import VersionStore
 from repo_version_monitor.monitor import VersionMonitor
 from repo_version_monitor.providers import DEFAULT_PROVIDER, SUPPORTED_PROVIDERS
+from repo_version_monitor.repo_url import host_mismatch_warning, parse_repository_input
 
 
 def _sync_config_hash(config_path: Path) -> list[str]:
@@ -80,14 +82,20 @@ def main() -> None:
     add_parser = subparsers.add_parser("add", help="Add a repository to the config.")
     add_parser.add_argument(
         "repository",
-        help="Repository path, e.g. owner/name (GitLab subgroups allowed: group/sub/project).",
+        help=(
+            "Repository path or URL: owner/name, github.com/owner/name, or "
+            "https://gitlab.com/group/sub/project. Without a host, github.com is assumed."
+        ),
     )
     add_parser.add_argument("--name", help="Display name. Defaults to the repository name.")
     add_parser.add_argument(
         "--provider",
         choices=SUPPORTED_PROVIDERS,
-        default=DEFAULT_PROVIDER,
-        help="Code-hosting provider of the repository (default: github).",
+        default=None,
+        help=(
+            "Code-hosting provider. Inferred from the host when possible; required for "
+            "self-managed hosts, e.g. --provider=gitlab (default: github)."
+        ),
     )
     add_parser.add_argument(
         "--branch",
@@ -164,11 +172,21 @@ def main() -> None:
     )
 
     if args.command == "add":
-        name = args.name or args.repository.rsplit("/", 1)[-1]
-        add_product_to_config(args.config, name, args.repository, args.branch, args.provider)
+        try:
+            parsed = parse_repository_input(args.repository, args.provider)
+            repository, provider = parsed.repository, parsed.provider
+            name = args.name or repository.rsplit("/", 1)[-1]
+            add_product_to_config(args.config, name, repository, args.branch, provider)
+        except ValueError as exc:
+            add_parser.error(str(exc))
         suffix = f", branch {args.branch}" if args.branch else ""
-        prefix = f"{args.provider}:" if args.provider != DEFAULT_PROVIDER else ""
-        print(f"Added {name} ({prefix}{args.repository}{suffix}) to {args.config}.")
+        prefix = f"{provider}:" if provider != DEFAULT_PROVIDER else ""
+        print(f"Added {name} ({prefix}{repository}{suffix}) to {args.config}.")
+        if args.provider is None and parsed.inferred_from_host and provider != DEFAULT_PROVIDER:
+            print(f"Provider {provider} inferred from host {parsed.host}.")
+        warning = host_mismatch_warning(parsed, read_provider_base_url(args.config, provider))
+        if warning:
+            print(f"Warning: {warning}")
         _sync_config_hash(args.config)
         return
 

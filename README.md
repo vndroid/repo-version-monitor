@@ -31,6 +31,8 @@ export MAILGUN_API_KEY="key-xxx"
 | `github` | GraphQL + REST | `owner/name` |
 | `gitlab` | [REST API v4](https://docs.gitlab.com/api/tags/) | `namespace/project`，支持子组 `group/subgroup/project` |
 
+`add` 命令可以直接粘贴完整仓库地址，由域名自动判断 provider，详见[仓库参数的写法](#仓库参数的写法)。
+
 **GitHub**：获取标签时采用分层策略，配置了令牌时走 GraphQL API（按 tag 提交时间倒序拉取全量）；未配置令牌或 GraphQL 失败时回退到 REST API 接口（该接口无时间排序，程序会筛选符合版本号形态的标签并按数值取最大）。
 
 **GitLab**：调用 `GET /api/v4/projects/:id/repository/tags`，项目路径会做 URL 编码后作为 `:id`，因此支持多级子组；请求参数固定为 `order_by=updated&sort=desc`，按更新时间倒序翻页拉取全量。公开项目无需令牌；私有项目通过 `PRIVATE-TOKEN` 请求头认证。自建实例把 `[gitlab]` 段的 `base_url` 指向自己的地址即可：
@@ -74,10 +76,45 @@ uv run repo-version-monitor --config config.toml format
 uv run repo-version-monitor --config config.toml add encode/httpx [--name httpx] [--branch 0.28]
 
 ## 以 GitLab 项目 https://gitlab.com/gitlab-org/gitlab-runner 为例
-uv run repo-version-monitor --config config.toml add gitlab-org/gitlab-runner --provider gitlab
+uv run repo-version-monitor --config config.toml add gitlab.com/gitlab-org/gitlab-runner
 ```
 
-默认截取仓库名作为产品名，可用 `--name` 参数指定自定义名称。支持 `--branch` 参数指定分支，支持存在同产品的不同分支，若不指定则默认跟踪所有标签。`--provider` 可选 `github`（默认）或 `gitlab`。
+默认截取仓库名作为产品名，可用 `--name` 参数指定自定义名称。支持 `--branch` 参数指定分支，支持存在同产品的不同分支，若不指定则默认跟踪所有标签。
+
+#### 仓库参数的写法
+
+仓库参数既接受 `owner/name` 路径，也接受完整域名，协议可带可不带（不带时按 `https://` 处理），下面这些写法等价：
+
+```bash
+add encode/httpx                                        # 不含域名，默认 github.com
+add github.com/encode/httpx                             # 不含协议
+add https://github.com/encode/httpx.git
+add https://github.com/encode/httpx/releases/tag/0.28.1 # 浏览器里复制的地址
+add git@github.com:encode/httpx.git                     # git remote 写法
+```
+
+带域名时按域名自动判断 provider：`github.com` → `github`，`gitlab.com` → `gitlab`；GitLab 页面地址中 `/-/` 之后的部分（如 `/-/tags`）会被自动去掉，子组路径 `group/subgroup/project` 保留。不带域名时默认 `github.com`，所以旧写法行为不变。
+
+#### `--provider` 参数
+
+`--provider` 可选 `github`（默认）或 `gitlab`，用于域名无法判断 provider 的场景，典型的就是 self-managed GitLab：
+
+```bash
+uv run repo-version-monitor --config config.toml add git.example.com/group/subgroup/project --provider gitlab
+```
+
+几点约定：
+
+- 域名不是已知的公开实例（既不是 `github.com` 也不是 `gitlab.com`）且没传 `--provider` 时直接报错，不会静默按 `github` 处理；
+- `--provider` 与域名推断结果冲突时（如 `--provider github gitlab.com/a/b`）报错退出；
+- 域名只用于判断 provider，不会写进配置。真正请求哪个实例仍由 `[gitlab]` 段的 `base_url` 决定，因此 self-managed 域名与 `base_url` 不一致时会给出提示，记得同步修改：
+
+```toml
+[gitlab]
+base_url = "https://git.example.com"
+```
+
+- GitHub 侧只支持 `github.com`，GitHub Enterprise 暂未支持，填了自建域名会给出提示。
 
 
 ### 修改追踪分支
