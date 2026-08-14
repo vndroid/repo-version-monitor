@@ -104,24 +104,106 @@ def add_product_to_config(
         file.write("\n" + _product_block(ProductConfig(name, repository, branch, provider)))
 
 
-def format_config(path: Path, template_path: Path | None = None) -> str:
-    """Ensure the config exists and is normalized. Returns "created" or "formatted".
+# Every setting the config may carry, in the order used by config.example.toml.
+# Settings written as "" mean "use the built-in default", the same convention
+# products already use for branch: an empty value is never a real value here.
+_DEFAULT_SETTINGS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    ("database", (("path", '""'),)),
+    ("github", (("token", '""'), ("per_page", "10"))),
+    ("gitlab", (("token", '""'), ("external_url", '""'))),
+    (
+        "mailgun",
+        (
+            ("enabled", "true"),
+            ("domain", '""'),
+            ("api_key", '""'),
+            ("from_email", '""'),
+            ("to_emails", "[]"),
+            ("base_url", '""'),
+        ),
+    ),
+    ("monitor", (("interval_seconds", "3600"), ("notify_on_first_seen", "false"))),
+)
+
+DEFAULT_DATABASE_PATH = "versions.sqlite3"
+DEFAULT_GITLAB_EXTERNAL_URL = "https://gitlab.com"
+DEFAULT_MAILGUN_BASE_URL = "https://api.mailgun.net/v3"
+
+
+@dataclass(frozen=True)
+class FormatResult:
+    #: "created" when the config was copied from the template, else "formatted".
+    action: str
+    #: Settings added by this run, as "section.key".
+    added_settings: list[str] = field(default_factory=list)
+
+
+def format_config(path: Path, template_path: Path | None = None) -> FormatResult:
+    """Ensure the config exists, is complete and is normalized.
 
     - Missing config: copy it from the template (config.example.toml next to it).
-    - Existing config: validate it, then rewrite the [[products]] blocks so each
-      is separated by one blank line and always carries a branch key ("" if unset).
+    - Existing config: validate it, add every missing setting with an empty or
+      default value, then rewrite the [[products]] blocks so each is separated
+      by one blank line and always carries provider and branch keys.
     """
     if not path.exists():
         template = template_path or path.parent / "config.example.toml"
         if not template.exists():
             raise FileNotFoundError(f"{path} is missing and template {template} was not found.")
         path.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
-        return "created"
+        return FormatResult("created")
 
     # Raises on invalid TOML or invalid product entries.
     products = load_products(path)
+    text, added = _fill_missing_settings(path.read_text(encoding="utf-8"))
+    path.write_text(text, encoding="utf-8")
     _write_products(path, products)
-    return "formatted"
+    return FormatResult("formatted", added)
+
+
+def _fill_missing_settings(text: str) -> tuple[str, list[str]]:
+    """Add every known setting the config does not define yet.
+
+    Existing values, key order and comments are left untouched: missing keys are
+    appended to their section, missing sections to the end of the file.
+    """
+    raw = tomllib.loads(text)
+    lines = text.splitlines()
+    added: list[str] = []
+
+    for section, settings in _DEFAULT_SETTINGS:
+        existing = raw.get(section)
+        if not isinstance(existing, dict):
+            if lines and lines[-1].strip():
+                lines.append("")
+            lines.append(f"[{section}]")
+            lines.extend(f"{key} = {value}" for key, value in settings)
+            added.extend(f"{section}.{key}" for key, _ in settings)
+            continue
+
+        missing = [(key, value) for key, value in settings if key not in existing]
+        if not missing:
+            continue
+        insert_at = _section_end_index(lines, section)
+        lines[insert_at:insert_at] = [f"{key} = {value}" for key, value in missing]
+        added.extend(f"{section}.{key}" for key, _ in missing)
+
+    return "\n".join(lines) + "\n", added
+
+
+def _section_end_index(lines: list[str], section: str) -> int:
+    """Index just past the last non-blank line of a section's block."""
+    header = f"[{section}]"
+    start = next(index for index, line in enumerate(lines) if line.strip() == header)
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        # Any other table header ends this section, including [[products]].
+        if lines[index].lstrip().startswith("["):
+            end = index
+            break
+    while end > start + 1 and not lines[end - 1].strip():
+        end -= 1
+    return end
 
 
 def edit_product_branch(
@@ -228,15 +310,13 @@ def _product_label(product: ProductConfig) -> str:
 
 
 def _product_block(product: ProductConfig) -> str:
-    """Render one [[products]] block; provider is only written when not github."""
-    provider_line = (
-        f'provider = "{product.provider}"\n' if product.provider != DEFAULT_PROVIDER else ""
-    )
+    """Render one [[products]] block; an empty provider means the default one."""
+    provider = "" if product.provider == DEFAULT_PROVIDER else product.provider
     return (
         "[[products]]\n"
         f'name = "{_escape_toml_string(product.name)}"\n'
-        + provider_line
-        + f'repository = "{product.repository}"\n'
+        f'provider = "{provider}"\n'
+        f'repository = "{product.repository}"\n'
         f'branch = "{_escape_toml_string(product.branch or "")}"\n'
     )
 
@@ -248,8 +328,15 @@ def _write_products(path: Path, products: list[ProductConfig]) -> None:
 
     blocks = [_product_block(product) for product in products]
 
-    parts = [part for part in (remainder, *blocks) if part]
-    path.write_text("\n\n".join(part.rstrip("\n") for part in parts) + "\n", encoding="utf-8")
+    body = "\n\n".join(block.rstrip("\n") for block in blocks)
+    if remainder and body:
+        # A comment line right before the first block introduces it; keep them
+        # together instead of pushing a blank line in between.
+        separator = "\n" if remainder.rsplit("\n", 1)[-1].lstrip().startswith("#") else "\n\n"
+        body = remainder + separator + body
+    else:
+        body = body or remainder
+    path.write_text(body + "\n", encoding="utf-8")
 
 
 def _strip_product_blocks(text: str) -> str:
@@ -295,7 +382,8 @@ def resolve_database_path(config_path: Path) -> Path:
     with config_path.open("rb") as file:
         raw = tomllib.load(file)
 
-    db_path = Path(raw.get("database", {}).get("path", "versions.sqlite3"))
+    # An empty path means "use the default", the same as leaving the key out.
+    db_path = Path(raw.get("database", {}).get("path") or DEFAULT_DATABASE_PATH)
     if not db_path.is_absolute():
         db_path = config_path.parent / db_path
     return db_path
@@ -345,7 +433,7 @@ def load_config(path: Path) -> AppConfig:
     api_key_env = mailgun_raw.get("api_key_env", "MAILGUN_API_KEY")
     # Priority: environment variable first, then the inline mailgun.api_key value.
     env_api_key = os.getenv(api_key_env)
-    api_key = env_api_key or mailgun_raw.get("api_key")
+    api_key = env_api_key or mailgun_raw.get("api_key") or None
     api_key_source = f"env {api_key_env}" if env_api_key else ("config mailgun.api_key" if api_key else None)
     if mailgun_enabled and not api_key:
         raise ValueError(f"Mailgun API key is missing. Set {api_key_env} or mailgun.api_key.")
@@ -353,7 +441,8 @@ def load_config(path: Path) -> AppConfig:
     token_env = github_raw.get("token_env", "GITHUB_TOKEN")
     # Priority: environment variable first, then the inline github.token value.
     env_token = os.getenv(token_env)
-    token = env_token or github_raw.get("token")
+    # Trailing `or None`: an empty value means "unset", not an empty token.
+    token = env_token or github_raw.get("token") or None
     token_source = f"env {token_env}" if env_token else ("config github.token" if token else None)
     if token_source:
         logger.debug("GitHub token loaded from %s.", token_source)
@@ -376,7 +465,7 @@ def load_config(path: Path) -> AppConfig:
     gitlab_token_env = gitlab_raw.get("token_env", "GITLAB_TOKEN")
     # Priority: environment variable first, then the inline gitlab.token value.
     env_gitlab_token = os.getenv(gitlab_token_env)
-    gitlab_token = env_gitlab_token or gitlab_raw.get("token")
+    gitlab_token = env_gitlab_token or gitlab_raw.get("token") or None
     gitlab_token_source = (
         f"env {gitlab_token_env}"
         if env_gitlab_token
@@ -393,12 +482,12 @@ def load_config(path: Path) -> AppConfig:
         database=DatabaseConfig(path=db_path),
         github=GitHubConfig(
             token=token,
-            per_page=min(max(int(github_raw.get("per_page", 10)), 1), 100),
+            per_page=min(max(int(github_raw.get("per_page") or 10), 1), 100),
             token_source=token_source,
         ),
         gitlab=GitLabConfig(
             token=gitlab_token,
-            external_url=_provider_external_url(raw, "gitlab") or "https://gitlab.com",
+            external_url=_provider_external_url(raw, "gitlab") or DEFAULT_GITLAB_EXTERNAL_URL,
             token_source=gitlab_token_source,
         ),
         mailgun=MailgunConfig(
@@ -412,11 +501,11 @@ def load_config(path: Path) -> AppConfig:
             to_emails=list(
                 mailgun_raw["to_emails"] if mailgun_enabled else mailgun_raw.get("to_emails", [])
             ),
-            base_url=mailgun_raw.get("base_url", "https://api.mailgun.net/v3").rstrip("/"),
+            base_url=(mailgun_raw.get("base_url") or DEFAULT_MAILGUN_BASE_URL).rstrip("/"),
             api_key_source=api_key_source,
         ),
         monitor=MonitorConfig(
-            interval_seconds=int(monitor_raw.get("interval_seconds", 3600)),
+            interval_seconds=int(monitor_raw.get("interval_seconds") or 3600),
             notify_on_first_seen=bool(monitor_raw.get("notify_on_first_seen", False)),
         ),
         products=products,

@@ -227,11 +227,15 @@ def main() -> None:
         return
 
     if args.command == "format":
-        action = format_config(args.config)
-        if action == "created":
+        result = format_config(args.config)
+        if result.action == "created":
             print(f"{args.config} did not exist; created it from the template.")
         else:
             print(f"Formatted {args.config}.")
+        if result.added_settings:
+            print(f"Added {len(result.added_settings)} missing setting(s):")
+            for setting in result.added_settings:
+                print(f"- {setting}")
         _sync_config_hash(args.config)
         return
 

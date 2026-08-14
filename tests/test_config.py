@@ -100,13 +100,13 @@ def test_add_gitlab_product_round_trip(tmp_path: Path) -> None:
     assert 'provider = "gitlab"' in config_path.read_text(encoding="utf-8")
 
 
-def test_github_products_omit_provider_key(tmp_path: Path) -> None:
+def test_github_products_write_an_empty_provider_key(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text("", encoding="utf-8")
 
     add_product_to_config(config_path, "httpx", "encode/httpx")
 
-    assert "provider" not in config_path.read_text(encoding="utf-8")
+    assert 'provider = ""' in config_path.read_text(encoding="utf-8")
     assert load_products(config_path)[0].provider == "github"
 
 
@@ -226,16 +226,18 @@ repository = "gitlab-org/gitlab-runner"
         encoding="utf-8",
     )
 
-    assert format_config(config_path) == "formatted"
+    assert format_config(config_path).action == "formatted"
 
-    expected = """
+    assert config_path.read_text(encoding="utf-8").endswith(
+        """
 [[products]]
 name = "runner"
 provider = "gitlab"
 repository = "gitlab-org/gitlab-runner"
 branch = ""
 """.lstrip()
-    assert config_path.read_text(encoding="utf-8") == expected
+    )
+    assert load_products(config_path)[0].provider == "gitlab"
 
 
 def test_load_products_rejects_invalid_name_in_config(tmp_path: Path) -> None:
@@ -365,7 +367,10 @@ def test_format_creates_config_from_template(tmp_path: Path) -> None:
     template.write_text('[[products]]\nname = "httpx"\nrepository = "encode/httpx"\n', encoding="utf-8")
     config_path = tmp_path / "config.toml"
 
-    assert format_config(config_path) == "created"
+    result = format_config(config_path)
+
+    assert result.action == "created"
+    assert result.added_settings == []
     assert config_path.read_text(encoding="utf-8") == template.read_text(encoding="utf-8")
 
 
@@ -392,28 +397,143 @@ branch = "v13"
         encoding="utf-8",
     )
 
-    assert format_config(config_path) == "formatted"
+    assert format_config(config_path).action == "formatted"
 
-    expected = """
-[database]
-path = "versions.sqlite3"
-
+    assert config_path.read_text(encoding="utf-8").endswith(
+        """
 [[products]]
 name = "httpx"
+provider = ""
 repository = "encode/httpx"
 branch = ""
 
 [[products]]
 name = "pg13"
+provider = ""
 repository = "postgres/postgres"
 branch = "v13"
 """.lstrip()
-    assert config_path.read_text(encoding="utf-8") == expected
+    )
 
-    # Empty branch reads back as no branch.
+    # Empty branch reads back as no branch, empty provider as the default one.
     products = load_products(config_path)
-    assert products[0].branch is None
+    assert (products[0].branch, products[0].provider) == (None, "github")
     assert products[1].branch == "v13"
+
+
+def test_format_adds_missing_settings(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[database]
+path = "versions.sqlite3"
+
+[mailgun]
+enabled = false
+
+[[products]]
+name = "httpx"
+repository = "encode/httpx"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = format_config(config_path)
+
+    assert "gitlab.external_url" in result.added_settings
+    assert "database.path" not in result.added_settings
+    text = config_path.read_text(encoding="utf-8")
+    assert '[gitlab]\ntoken = ""\nexternal_url = ""' in text
+    # Existing values are never overwritten.
+    assert 'path = "versions.sqlite3"' in text
+    # Empty settings read back as the built-in defaults.
+    assert load_config(config_path).gitlab.external_url == "https://gitlab.com"
+
+
+def test_format_fills_keys_inside_existing_sections(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[gitlab]
+# Keep this comment.
+token = "glpat-inline"
+
+[monitor]
+interval_seconds = 60
+
+[[products]]
+name = "httpx"
+repository = "encode/httpx"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = format_config(config_path)
+
+    text = config_path.read_text(encoding="utf-8")
+    assert "# Keep this comment." in text
+    assert '[gitlab]\n# Keep this comment.\ntoken = "glpat-inline"\nexternal_url = ""\n' in text
+    assert "[monitor]\ninterval_seconds = 60\nnotify_on_first_seen = false\n" in text
+    assert "gitlab.token" not in result.added_settings
+    assert "monitor.interval_seconds" not in result.added_settings
+
+
+def test_format_is_idempotent(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[[products]]\nname = "httpx"\nrepository = "encode/httpx"\n', encoding="utf-8"
+    )
+
+    format_config(config_path)
+    first = config_path.read_text(encoding="utf-8")
+    second_result = format_config(config_path)
+
+    assert second_result.added_settings == []
+    assert config_path.read_text(encoding="utf-8") == first
+
+
+def test_empty_settings_fall_back_to_defaults(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[database]
+path = ""
+
+[github]
+token = ""
+per_page = 10
+
+[gitlab]
+token = ""
+external_url = ""
+
+[mailgun]
+enabled = false
+base_url = ""
+
+[monitor]
+interval_seconds = 3600
+notify_on_first_seen = false
+
+[[products]]
+name = "httpx"
+provider = ""
+repository = "encode/httpx"
+branch = ""
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.database.path == tmp_path / "versions.sqlite3"
+    assert config.github.token is None
+    assert config.gitlab.external_url == "https://gitlab.com"
+    assert config.mailgun.base_url == "https://api.mailgun.net/v3"
+    assert config.products[0].provider == "github"
+    assert config.products[0].branch is None
 
 
 def test_format_rejects_invalid_config(tmp_path: Path) -> None:

@@ -8,8 +8,8 @@ per_page = 10
 
 [gitlab]
 # Optional. You can also set GITLAB_TOKEN in the environment.
-# Only needed for private projects or self-hosted instances with restrictions.
-# token = "GITLAB_TOKEN"
+# Only needed for private projects or self-managed instances with restrictions.
+token = ""
 # For self-managed GitLab, point external_url at your instance.
 external_url = "https://gitlab.com"
 
@@ -29,21 +29,22 @@ base_url = "https://api.mailgun.net/v3"
 interval_seconds = 3600
 notify_on_first_seen = false
 
+# An empty provider means "github"; set it to "gitlab" for GitLab projects.
+# GitLab paths may include subgroups: group/subgroup/project.
 [[products]]
 name = "httpx"
+provider = ""
 repository = "encode/httpx"
 branch = ""
 
 [[products]]
 name = "FastAPI"
+provider = ""
 repository = "fastapi/fastapi"
 branch = ""
 
-# provider defaults to "github" when omitted; set it to "gitlab" for GitLab
-# projects. GitLab paths may include subgroups: group/subgroup/project.
 [[products]]
 name = "gitlab-runner"
 provider = "gitlab"
 repository = "gitlab-org/gitlab-runner"
 branch = ""
-

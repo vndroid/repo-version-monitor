@@ -24,7 +24,7 @@ export MAILGUN_API_KEY="key-xxx"
 
 ## 供应商（provider）
 
-每个产品都有一个 `provider` 字段，缺省为 `github`，因此旧配置无需改动即可继续使用。目前支持：
+每个产品都有一个 `provider` 字段，留空或缺省均为 `github`，因此旧配置无需改动即可继续使用。目前支持：
 
 | provider | 接口 | 仓库写法 |
 | --- | --- | --- |
@@ -67,7 +67,24 @@ uv run repo-version-monitor --config config.toml format
 ```
 当 `config.toml` 不存在时从同目录模板配置 `config.example.toml` 复制一份；
 
-存在则校验格式是否合法，并规范化所有 `[[products]]` 块，产品之间留空行，为未配置 `branch` 的产品补空值。
+存在则做三件事：
+
+1. 校验格式是否合法；
+2. **补全缺失的配置项**：`[database]`、`[github]`、`[gitlab]`、`[mailgun]`、`[monitor]` 各段中缺失的键会补上默认值，整段缺失时补上整段。已有的值、键顺序和注释都原样保留，只在所属段末尾追加缺失项，命令执行后会列出补了哪些项；
+3. 规范化所有 `[[products]]` 块，产品之间留空行，为未配置 `provider`、`branch` 的产品补空值。
+
+补全时字符串类配置一律写成空值 `""`，含义是"用内置默认值"，因此不必手填也不会覆盖你已经写好的值：
+
+| 配置项 | 留空时的默认值 |
+| --- | --- |
+| `products.provider` | `github` |
+| `products.branch` | 不限分支，跟踪全部标签 |
+| `database.path` | `versions.sqlite3` |
+| `github.token` / `gitlab.token` / `mailgun.api_key` | 视为未设置，回退到环境变量 |
+| `gitlab.external_url` | `https://gitlab.com` |
+| `mailgun.base_url` | `https://api.mailgun.net/v3` |
+
+`format` 是幂等的，重复执行不会再产生改动。
 
 ### 添加公开仓库
 
