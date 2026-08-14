@@ -43,8 +43,8 @@ def test_fetch_url_encodes_project_path() -> None:
     assert tags[0].commit_sha == "sha1"
 
 
-def test_fetch_supports_nested_subgroups_and_custom_base_url() -> None:
-    gitlab = GitLabClient(base_url="https://gitlab.example.com/")
+def test_fetch_supports_nested_subgroups_and_custom_external_url() -> None:
+    gitlab = GitLabClient(external_url="https://gitlab.example.com/")
     client = _FakeClient([[]])
 
     asyncio.run(gitlab.fetch_all_tags(client, "group/subgroup/project"))

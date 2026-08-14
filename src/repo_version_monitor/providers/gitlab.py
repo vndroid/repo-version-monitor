@@ -21,9 +21,10 @@ class GitLabClient:
     also supports nested groups like "group/subgroup/project".
     """
 
-    def __init__(self, token: str | None = None, base_url: str = "https://gitlab.com") -> None:
+    def __init__(self, token: str | None = None, external_url: str = "https://gitlab.com") -> None:
         self.token = token
-        self.base_url = base_url.rstrip("/")
+        # External URL of the instance; self-managed setups point elsewhere.
+        self.external_url = external_url.rstrip("/")
 
     async def fetch_tags(self, client: httpx.AsyncClient, repository: str) -> list[Tag]:
         return await self.fetch_all_tags(client, repository)
@@ -39,7 +40,7 @@ class GitLabClient:
         page = 1
         while True:
             response = await client.get(
-                f"{self.base_url}/api/v4/projects/{project_id}/repository/tags",
+                f"{self.external_url}/api/v4/projects/{project_id}/repository/tags",
                 headers=headers,
                 params={
                     "per_page": _PER_PAGE,

@@ -25,7 +25,7 @@ class VersionMonitor:
         self.config = config
         self.store = VersionStore(config.database.path)
         self.github = GitHubClient(config.github.token, config.github.per_page)
-        self.gitlab = GitLabClient(config.gitlab.token, config.gitlab.base_url)
+        self.gitlab = GitLabClient(config.gitlab.token, config.gitlab.external_url)
         # One client per provider; add new providers here.
         self.providers: dict[str, TagProvider] = {
             "github": self.github,

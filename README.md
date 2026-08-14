@@ -35,13 +35,15 @@ export MAILGUN_API_KEY="key-xxx"
 
 **GitHub**：获取标签时采用分层策略，配置了令牌时走 GraphQL API（按 tag 提交时间倒序拉取全量）；未配置令牌或 GraphQL 失败时回退到 REST API 接口（该接口无时间排序，程序会筛选符合版本号形态的标签并按数值取最大）。
 
-**GitLab**：调用 `GET /api/v4/projects/:id/repository/tags`，项目路径会做 URL 编码后作为 `:id`，因此支持多级子组；请求参数固定为 `order_by=updated&sort=desc`，按更新时间倒序翻页拉取全量。公开项目无需令牌；私有项目通过 `PRIVATE-TOKEN` 请求头认证。自建实例把 `[gitlab]` 段的 `base_url` 指向自己的地址即可：
+**GitLab**：调用 `GET /api/v4/projects/:id/repository/tags`，项目路径会做 URL 编码后作为 `:id`，因此支持多级子组；请求参数固定为 `order_by=updated&sort=desc`，按更新时间倒序翻页拉取全量。公开项目无需令牌；私有项目通过 `PRIVATE-TOKEN` 请求头认证。自建实例把 `[gitlab]` 段的 `external_url` 指向自己的实例地址即可：
 
 ```toml
 [gitlab]
 # token = "GITLAB_TOKEN"
-base_url = "https://gitlab.example.com"
+external_url = "https://gitlab.example.com"
 ```
+
+> 该配置项原名 `base_url`，已重命名为 `external_url`（与 GitLab 自身 `gitlab.rb` 的叫法一致）。旧配置不会被静默忽略：仍写着 `base_url` 时会报错提示改名。
 
 同一仓库路径在不同 provider 下互不冲突，会被视为两条独立记录。
 
@@ -107,11 +109,11 @@ uv run repo-version-monitor --config config.toml add git.example.com/group/subgr
 
 - 域名不是已知的公开实例（既不是 `github.com` 也不是 `gitlab.com`）且没传 `--provider` 时直接报错，不会静默按 `github` 处理；
 - `--provider` 与域名推断结果冲突时（如 `--provider github gitlab.com/a/b`）报错退出；
-- 域名只用于判断 provider，不会写进配置。真正请求哪个实例仍由 `[gitlab]` 段的 `base_url` 决定，因此 self-managed 域名与 `base_url` 不一致时会给出提示，记得同步修改：
+- 域名只用于判断 provider，不会写进配置。真正请求哪个实例仍由 `[gitlab]` 段的 `external_url` 决定，因此 self-managed 域名与 `external_url` 不一致时会给出提示，记得同步修改：
 
 ```toml
 [gitlab]
-base_url = "https://git.example.com"
+external_url = "https://git.example.com"
 ```
 
 - GitHub 侧只支持 `github.com`，GitHub Enterprise 暂未支持，填了自建域名会给出提示。

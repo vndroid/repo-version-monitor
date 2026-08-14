@@ -149,7 +149,7 @@ enabled = false
 
 [gitlab]
 token = "glpat-inline"
-base_url = "https://gitlab.example.com/"
+external_url = "https://gitlab.example.com/"
 
 [[products]]
 name = "runner"
@@ -163,8 +163,31 @@ repository = "gitlab-org/gitlab-runner"
 
     assert config.gitlab.token == "glpat-inline"
     assert config.gitlab.token_source == "config gitlab.token"
-    assert config.gitlab.base_url == "https://gitlab.example.com"
+    assert config.gitlab.external_url == "https://gitlab.example.com"
     assert config.products[0].provider == "gitlab"
+
+
+def test_load_config_rejects_renamed_gitlab_base_url(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[mailgun]
+enabled = false
+
+[gitlab]
+base_url = "https://gitlab.example.com"
+
+[[products]]
+name = "runner"
+provider = "gitlab"
+repository = "gitlab-org/gitlab-runner"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="renamed to external_url"):
+        load_config(config_path)
 
 
 def test_load_config_prefers_gitlab_env_token(tmp_path: Path, monkeypatch) -> None:

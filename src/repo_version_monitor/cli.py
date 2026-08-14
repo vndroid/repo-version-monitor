@@ -17,7 +17,7 @@ from repo_version_monitor.config import (
     format_config,
     load_config,
     load_products,
-    read_provider_base_url,
+    read_provider_external_url,
     resolve_database_path,
 )
 from repo_version_monitor.db import VersionStore
@@ -184,9 +184,15 @@ def main() -> None:
         print(f"Added {name} ({prefix}{repository}{suffix}) to {args.config}.")
         if args.provider is None and parsed.inferred_from_host and provider != DEFAULT_PROVIDER:
             print(f"Provider {provider} inferred from host {parsed.host}.")
-        warning = host_mismatch_warning(parsed, read_provider_base_url(args.config, provider))
-        if warning:
-            print(f"Warning: {warning}")
+        try:
+            configured_url = read_provider_external_url(args.config, provider)
+        except ValueError as exc:
+            # The product was already written; surface the config problem instead.
+            print(f"Warning: {exc}")
+        else:
+            warning = host_mismatch_warning(parsed, configured_url)
+            if warning:
+                print(f"Warning: {warning}")
         _sync_config_hash(args.config)
         return
 

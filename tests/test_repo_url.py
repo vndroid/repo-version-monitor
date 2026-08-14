@@ -130,11 +130,11 @@ def test_invalid_provider_errors() -> None:
         parse_repository_input("a/b", provider="bitbucket")
 
 
-def test_no_warning_when_host_matches_configured_base_url() -> None:
+def test_no_warning_when_host_matches_configured_external_url() -> None:
     parsed = parse_repository_input("gitlab.com/a/b")
 
     assert host_mismatch_warning(parsed, "https://gitlab.com") is None
-    # Unset base_url falls back to the provider default.
+    # Unset external_url falls back to the provider default.
     assert host_mismatch_warning(parsed, None) is None
 
 
@@ -145,7 +145,7 @@ def test_warning_when_self_managed_host_is_not_configured() -> None:
 
     assert warning is not None
     assert "git.mycorp.com" in warning
-    assert "base_url" in warning
+    assert "external_url" in warning
 
 
 def test_no_warning_when_self_managed_host_is_configured() -> None:

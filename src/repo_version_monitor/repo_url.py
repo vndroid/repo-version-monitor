@@ -107,11 +107,13 @@ def parse_repository_input(raw: str, provider: str | None = None) -> ParsedRepos
     )
 
 
-def host_mismatch_warning(parsed: ParsedRepository, configured_base_url: str | None) -> str | None:
+def host_mismatch_warning(
+    parsed: ParsedRepository, configured_external_url: str | None
+) -> str | None:
     """Warn when the host in the input is not the instance that will be queried.
 
     The provider clients are configured globally, so a self-managed host only
-    works after ``[gitlab] base_url`` points at it.
+    works after ``[gitlab] external_url`` points at it.
     """
     if parsed.host is None:
         return None
@@ -126,12 +128,12 @@ def host_mismatch_warning(parsed: ParsedRepository, configured_base_url: str | N
         return None
 
     default_host = DEFAULT_PROVIDER_HOSTS[parsed.provider]
-    configured_host = _hostname(configured_base_url) or default_host
+    configured_host = _hostname(configured_external_url) or default_host
     if parsed.host != configured_host:
         return (
             f"Host {parsed.host} does not match the configured "
-            f"{parsed.provider}.base_url ({configured_host}); tags would be fetched from "
-            f"{configured_host}. Set [{parsed.provider}] base_url = "
+            f"{parsed.provider}.external_url ({configured_host}); tags would be fetched from "
+            f"{configured_host}. Set [{parsed.provider}] external_url = "
             f'"https://{parsed.host}" in the config.'
         )
     return None
@@ -194,10 +196,10 @@ def _resolve_provider(raw: str, host: str | None, provider: str | None) -> str:
     )
 
 
-def _hostname(base_url: str | None) -> str | None:
-    if not base_url:
+def _hostname(url: str | None) -> str | None:
+    if not url:
         return None
-    value = base_url.strip()
+    value = url.strip()
     if not _SCHEME_PATTERN.match(value):
         value = "https://" + value
     return urlsplit(value).netloc.lower() or None

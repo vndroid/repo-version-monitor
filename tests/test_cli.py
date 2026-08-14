@@ -43,7 +43,7 @@ def test_add_without_host_defaults_to_github(tmp_path: Path, capsys, monkeypatch
     assert (product.provider, product.repository) == ("github", "encode/httpx")
 
 
-def test_add_self_managed_gitlab_warns_about_base_url(
+def test_add_self_managed_gitlab_warns_about_external_url(
     tmp_path: Path, capsys, monkeypatch
 ) -> None:
     config_path = tmp_path / "config.toml"
@@ -56,9 +56,20 @@ def test_add_self_managed_gitlab_warns_about_base_url(
     assert "Warning:" in capsys.readouterr().out
 
 
-def test_add_self_managed_gitlab_matching_base_url_is_quiet(
+def test_add_self_managed_gitlab_matching_external_url_is_quiet(
     tmp_path: Path, capsys, monkeypatch
 ) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[gitlab]\nexternal_url = "https://git.mycorp.com"\n', encoding="utf-8"
+    )
+
+    _run_add(config_path, monkeypatch, "git.mycorp.com/group/project", "--provider", "gitlab")
+
+    assert "Warning:" not in capsys.readouterr().out
+
+
+def test_add_warns_when_config_still_uses_base_url(tmp_path: Path, capsys, monkeypatch) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         '[gitlab]\nbase_url = "https://git.mycorp.com"\n', encoding="utf-8"
@@ -66,7 +77,9 @@ def test_add_self_managed_gitlab_matching_base_url_is_quiet(
 
     _run_add(config_path, monkeypatch, "git.mycorp.com/group/project", "--provider", "gitlab")
 
-    assert "Warning:" not in capsys.readouterr().out
+    # The product is still added; the stale key is reported instead of the host check.
+    assert load_products(config_path)[0].repository == "group/project"
+    assert "renamed to external_url" in capsys.readouterr().out
 
 
 def test_add_unknown_host_without_provider_exits(tmp_path: Path, capsys, monkeypatch) -> None:

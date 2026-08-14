@@ -36,7 +36,8 @@ class GitHubConfig:
 @dataclass(frozen=True)
 class GitLabConfig:
     token: str | None = field(repr=False)
-    base_url: str
+    #: External URL of the instance, e.g. https://gitlab.example.com.
+    external_url: str
     token_source: str | None = None
 
 
@@ -300,8 +301,8 @@ def resolve_database_path(config_path: Path) -> Path:
     return db_path
 
 
-def read_provider_base_url(config_path: Path, provider: str) -> str | None:
-    """Return the base_url configured for a provider, or None when unset.
+def read_provider_external_url(config_path: Path, provider: str) -> str | None:
+    """Return the external_url configured for a provider, or None when unset.
 
     Reads the raw TOML only, so it works before the full config is valid
     (e.g. during `add`, when Mailgun settings may still be missing).
@@ -313,8 +314,19 @@ def read_provider_base_url(config_path: Path, provider: str) -> str | None:
             raw = tomllib.load(file)
     except (OSError, tomllib.TOMLDecodeError):
         return None
-    base_url = raw.get(provider, {}).get("base_url")
-    return base_url.rstrip("/") if isinstance(base_url, str) and base_url else None
+    return _provider_external_url(raw, provider)
+
+
+def _provider_external_url(raw: dict, provider: str) -> str | None:
+    """Read [<provider>] external_url, rejecting the old base_url spelling."""
+    section = raw.get(provider, {})
+    if "base_url" in section:
+        raise ValueError(
+            f"[{provider}] base_url has been renamed to external_url; rename the key, "
+            f'e.g. external_url = "{section["base_url"]}".'
+        )
+    external_url = section.get("external_url")
+    return external_url.rstrip("/") if isinstance(external_url, str) and external_url else None
 
 
 def load_config(path: Path) -> AppConfig:
@@ -386,7 +398,7 @@ def load_config(path: Path) -> AppConfig:
         ),
         gitlab=GitLabConfig(
             token=gitlab_token,
-            base_url=gitlab_raw.get("base_url", "https://gitlab.com").rstrip("/"),
+            external_url=_provider_external_url(raw, "gitlab") or "https://gitlab.com",
             token_source=gitlab_token_source,
         ),
         mailgun=MailgunConfig(
