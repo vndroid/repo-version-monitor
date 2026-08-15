@@ -12,6 +12,7 @@ from repo_version_monitor.config import (
     config_file_hash,
 )
 from repo_version_monitor.db import VersionStore
+from repo_version_monitor.http_client import new_async_client
 from repo_version_monitor.mailgun import MailgunClient, VersionUpdate
 from repo_version_monitor.providers import (
     GitHubClient,
@@ -86,7 +87,7 @@ class VersionMonitor:
                 product for product in products if not self._has_latest_tag(product)
             ]
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with new_async_client(self.config.proxy) as client:
             for product in products:
                 repo, branch, provider = product.repository, product.branch, product.provider
                 instance = product.external_url or ""
@@ -211,7 +212,7 @@ class VersionMonitor:
             for event in events
         ]
         # Always one all-in-one email covering the whole backlog.
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with new_async_client(self.config.proxy) as client:
             await self.mailgun.send_updates(client, updates, subject_prefix="accumulation:")
         for event in events:
             self.store.mark_notified(event.event_id)

@@ -20,6 +20,8 @@ from repo_version_monitor.config import (
     resolve_database_path,
 )
 from repo_version_monitor.db import VersionStore
+from repo_version_monitor.http_client import describe as describe_proxy
+from repo_version_monitor.http_client import new_async_client
 from repo_version_monitor.monitor import VersionMonitor, product_key
 from repo_version_monitor.providers import DEFAULT_PROVIDER, SUPPORTED_PROVIDERS
 from repo_version_monitor.repo_url import parse_repository_input, url_host
@@ -340,6 +342,7 @@ def main() -> None:
         ):
             source = "config products.token" if has_token else "not set (unauthenticated)"
             print(f"{instance} token: {source}")
+        print(f"Proxy: {describe_proxy(config.proxy)}")
         if config.mailgun.enabled:
             print(f"Mailgun API key: {config.mailgun.api_key_source or 'not set'}")
         show_progress = args.log_level is None
@@ -388,6 +391,7 @@ def main() -> None:
         print(f"  from:     {mg.from_email}")
         print(f"  to:       {', '.join(mg.to_emails) or '(empty)'}")
         print(f"  api_url:  {mg.api_url}")
+        print(f"  proxy:    {describe_proxy(config.proxy)}")
         print(f"  api_key:  {mg.api_key_source or 'not set'}")
 
         problems = [
@@ -406,7 +410,7 @@ def main() -> None:
             return
 
         async def _send_test() -> httpx.Response:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with new_async_client(config.proxy) as client:
                 return await monitor.mailgun.send_test(client)
 
         print("Sending test email...")

@@ -22,6 +22,36 @@ export MAILGUN_API_KEY="key-xxx"
 
 密钥读取优先级（GitHub 令牌、GitLab 令牌与 Mailgun 令牌一致）：先读环境变量（变量名分别由 `token_env`、`token_env`、`api_key_env` 指定，默认 `GITHUB_TOKEN`、`GITLAB_TOKEN`、`MAILGUN_API_KEY`），不存在时回退到配置文件中的 `token` / `api_key` 字段。推荐使用环境变量，内联字段仅作为本地调试的便捷方式，注意不要将含密钥的配置文件提交到版本库。执行 `check` 时会输出密钥的实际来源（环境变量还是配置文件）。
 
+### 代理
+
+所有外发请求（GitHub、GitLab、Mailgun）都可以走代理，支持 http 与 socks5：
+
+```toml
+[proxy]
+enable = false
+# "http" 或 "socks5"
+type = "http"
+host = ""
+port = 8080
+# 可选的代理认证
+username = ""
+password = ""
+```
+
+- `host` 只写主机名或 IP，协议由 `type` 决定，写成 `http://127.0.0.1` 会报错；
+- `username` 为空时按免认证处理，只填 `password` 会报错；
+- `enable = false` 时不做任何校验，其余字段填错也不影响运行；
+- `enable = false` 时保持 httpx 默认行为，仍然尊重 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 环境变量；`enable = true` 时一律使用配置里的代理，忽略环境变量；
+- socks5 下 DNS 解析同样走代理：目标域名原样发给代理，由代理所在网络解析，本机不做解析。
+
+`check` 与 `mailtest` 会打印当前生效的代理，便于确认：
+
+```
+Proxy: socks5://127.0.0.1:1080 (authenticated)
+```
+
+使用 socks5 需要 `socksio`，已通过 `httpx[socks]` 声明在依赖中，`uv sync` 会自动安装。
+
 ## 供应商（provider）
 
 每个产品都有一个 `provider` 字段，留空或缺省均为 `github`，因此旧配置无需改动即可继续使用。目前支持：
@@ -84,7 +114,7 @@ uv run repo-version-monitor --config config.toml format
 存在则做三件事：
 
 1. 校验格式是否合法；
-2. **补全缺失的配置项**：`[database]`、`[github]`、`[gitlab]`、`[mailgun]`、`[monitor]` 各段中缺失的键会补上默认值，整段缺失时补上整段。已有的值、键顺序和注释都原样保留，只在所属段末尾追加缺失项，命令执行后会列出补了哪些项；
+2. **补全缺失的配置项**：`[database]`、`[github]`、`[gitlab]`、`[mailgun]`、`[monitor]`、`[proxy]` 各段中缺失的键会补上默认值，整段缺失时补上整段。已有的值、键顺序和注释都原样保留，只在所属段末尾追加缺失项，命令执行后会列出补了哪些项；
 3. 规范化所有 `[[products]]` 块，产品之间留空行，为未配置 `provider`、`branch` 的产品补空值。
 
 补全时字符串类配置一律写成空值 `""`，含义是"用内置默认值"，因此不必手填也不会覆盖你已经写好的值：
@@ -98,6 +128,8 @@ uv run repo-version-monitor --config config.toml format
 | `products.external_url` | 官方实例（github.com / gitlab.com） |
 | `products.token` | 匿名访问该实例 |
 | `mailgun.api_url` | `https://api.mailgun.net/v3` |
+| `proxy.type` | `http` |
+| `proxy.port` | `8080` |
 
 `format` 是幂等的，重复执行不会再产生改动。
 

@@ -29,10 +29,22 @@ api_url = "https://api.mailgun.net/v3"
 interval_seconds = 3600
 notify_on_first_seen = false
 
+[proxy]
+# Proxy for every outgoing request (GitHub, GitLab, Mailgun). When disabled,
+# the HTTP_PROXY/HTTPS_PROXY environment variables still apply as usual.
+enable = false
+# "http" or "socks5".
+type = "http"
+host = ""
+port = 8080
+# Optional proxy credentials.
+username = ""
+password = ""
+
 # An empty provider means "github"; set it to "gitlab" for GitLab projects.
 # GitLab paths may include subgroups: group/subgroup/project.
-# external_url and token are only for self-managed GitLab instances: leave them
-# empty for github.com and gitlab.com projects.
+# external_url and token are only for self-managed GitLab instances (see the
+# last entry): leave them empty for github.com and gitlab.com projects.
 [[products]]
 name = "httpx"
 provider = ""
@@ -57,7 +69,6 @@ token = ""
 repository = "gitlab-org/gitlab-runner"
 branch = ""
 
-# A project on a self-managed GitLab instance.
 [[products]]
 name = "example"
 provider = "gitlab"

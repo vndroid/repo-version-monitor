@@ -66,6 +66,23 @@ class MailgunConfig:
 
 
 @dataclass(frozen=True)
+class ProxyConfig:
+    """Outgoing proxy for every API request (GitHub, GitLab, Mailgun)."""
+
+    enable: bool = False
+    #: "http" or "socks5".
+    type: str = "http"
+    host: str = ""
+    port: int = 8080
+    username: str = ""
+    password: str = field(default="", repr=False)
+
+    @property
+    def url(self) -> str:
+        return f"{self.type}://{self.host}:{self.port}"
+
+
+@dataclass(frozen=True)
 class DatabaseConfig:
     path: Path
 
@@ -85,6 +102,7 @@ class AppConfig:
     monitor: MonitorConfig
     products: list[ProductConfig]
     source_path: Path
+    proxy: ProxyConfig = field(default_factory=ProxyConfig)
 
 
 def config_file_hash(path: Path) -> str:
@@ -137,7 +155,20 @@ _DEFAULT_SETTINGS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         ),
     ),
     ("monitor", (("interval_seconds", "3600"), ("notify_on_first_seen", "false"))),
+    (
+        "proxy",
+        (
+            ("enable", "false"),
+            ("type", '"http"'),
+            ("host", '""'),
+            ("port", "8080"),
+            ("username", '""'),
+            ("password", '""'),
+        ),
+    ),
 )
+
+SUPPORTED_PROXY_TYPES = ("http", "socks5")
 
 DEFAULT_DATABASE_PATH = "versions.sqlite3"
 DEFAULT_GITLAB_EXTERNAL_URL = "https://gitlab.com"
@@ -447,6 +478,42 @@ def reject_outdated_settings(raw: dict) -> None:
             raise ValueError(f"[{section}] {key} " + hint.format(value=values[key]))
 
 
+def load_proxy_config(raw: dict) -> ProxyConfig:
+    """Read the [proxy] section; an empty/missing section means no proxy."""
+    proxy_raw = raw.get("proxy", {})
+    proxy = ProxyConfig(
+        enable=bool(proxy_raw.get("enable", False)),
+        # Empty values mean "the default", as everywhere else in the config.
+        type=(proxy_raw.get("type") or "http").lower(),
+        host=(proxy_raw.get("host") or "").strip(),
+        port=int(proxy_raw.get("port") or 8080),
+        username=proxy_raw.get("username") or "",
+        password=proxy_raw.get("password") or "",
+    )
+    validate_proxy(proxy)
+    return proxy
+
+
+def validate_proxy(proxy: ProxyConfig) -> None:
+    if not proxy.enable:
+        return
+    if proxy.type not in SUPPORTED_PROXY_TYPES:
+        supported = ", ".join(SUPPORTED_PROXY_TYPES)
+        raise ValueError(f"Invalid proxy.type {proxy.type!r}: expected one of {supported}.")
+    if not proxy.host:
+        raise ValueError("proxy.host is required when proxy.enable is true.")
+    # A scheme in host would end up duplicated in the proxy URL.
+    if "://" in proxy.host or "/" in proxy.host:
+        raise ValueError(
+            f"Invalid proxy.host {proxy.host!r}: use the host only, "
+            "e.g. 127.0.0.1; the scheme comes from proxy.type."
+        )
+    if not 1 <= proxy.port <= 65535:
+        raise ValueError(f"Invalid proxy.port {proxy.port}: expected 1-65535.")
+    if proxy.password and not proxy.username:
+        raise ValueError("proxy.password is set but proxy.username is empty.")
+
+
 def load_config(path: Path) -> AppConfig:
     with path.open("rb") as file:
         raw = tomllib.load(file)
@@ -538,6 +605,7 @@ def load_config(path: Path) -> AppConfig:
         ),
         products=products,
         source_path=path,
+        proxy=load_proxy_config(raw),
     )
 
 

@@ -638,6 +638,101 @@ branch = ""
     assert config.products[0].branch is None
 
 
+def _proxy_config(tmp_path: Path, section: str) -> Path:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f"""
+[mailgun]
+enabled = false
+
+{section}
+
+[[products]]
+name = "httpx"
+repository = "encode/httpx"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    return config_path
+
+
+def test_proxy_defaults_to_disabled(tmp_path: Path) -> None:
+    config = load_config(_proxy_config(tmp_path, ""))
+
+    assert config.proxy.enable is False
+    assert config.proxy.type == "http"
+
+
+def test_load_socks5_proxy(tmp_path: Path) -> None:
+    config_path = _proxy_config(
+        tmp_path,
+        """
+[proxy]
+enable = true
+type = "socks5"
+host = "127.0.0.1"
+port = 1080
+username = "user"
+password = "secret"
+""".strip(),
+    )
+
+    proxy = load_config(config_path).proxy
+
+    assert (proxy.enable, proxy.type, proxy.host, proxy.port) == (True, "socks5", "127.0.0.1", 1080)
+    assert (proxy.username, proxy.password) == ("user", "secret")
+    assert proxy.url == "socks5://127.0.0.1:1080"
+    # The password is not exposed by repr, so it stays out of logs.
+    assert "secret" not in repr(proxy)
+
+
+def test_empty_proxy_values_fall_back_to_defaults(tmp_path: Path) -> None:
+    config_path = _proxy_config(
+        tmp_path,
+        """
+[proxy]
+enable = false
+type = ""
+host = ""
+port = 0
+username = ""
+password = ""
+""".strip(),
+    )
+
+    proxy = load_config(config_path).proxy
+
+    assert (proxy.type, proxy.port) == ("http", 8080)
+
+
+@pytest.mark.parametrize(
+    ("section", "message"),
+    [
+        ('[proxy]\nenable = true\ntype = "ftp"\nhost = "127.0.0.1"', "Invalid proxy.type"),
+        ("[proxy]\nenable = true", "proxy.host is required"),
+        (
+            '[proxy]\nenable = true\nhost = "http://127.0.0.1"',
+            "Invalid proxy.host",
+        ),
+        ('[proxy]\nenable = true\nhost = "127.0.0.1"\nport = 70000', "Invalid proxy.port"),
+        (
+            '[proxy]\nenable = true\nhost = "127.0.0.1"\npassword = "secret"',
+            "proxy.username is empty",
+        ),
+    ],
+)
+def test_invalid_proxy_settings(tmp_path: Path, section: str, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        load_config(_proxy_config(tmp_path, section))
+
+
+def test_invalid_proxy_settings_ignored_while_disabled(tmp_path: Path) -> None:
+    # Nothing is validated until the proxy is switched on.
+    config = load_config(_proxy_config(tmp_path, '[proxy]\nenable = false\ntype = "ftp"'))
+
+    assert config.proxy.enable is False
+
+
 def test_format_rejects_invalid_config(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text('[[products]]\nname = "bad name"\nrepository = "a/b"\n', encoding="utf-8")
