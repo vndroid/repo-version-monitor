@@ -718,7 +718,7 @@ repository = "encode/httpx"
 def test_proxy_defaults_to_disabled(tmp_path: Path) -> None:
     config = load_config(_proxy_config(tmp_path, ""))
 
-    assert config.proxy.enable is False
+    assert config.proxy.enabled is False
     assert config.proxy.type == "http"
 
 
@@ -727,7 +727,7 @@ def test_load_socks5_proxy(tmp_path: Path) -> None:
         tmp_path,
         """
 [proxy]
-enable = true
+enabled = true
 type = "socks5"
 host = "127.0.0.1"
 port = 1080
@@ -738,7 +738,7 @@ password = "secret"
 
     proxy = load_config(config_path).proxy
 
-    assert (proxy.enable, proxy.type, proxy.host, proxy.port) == (True, "socks5", "127.0.0.1", 1080)
+    assert (proxy.enabled, proxy.type, proxy.host, proxy.port) == (True, "socks5", "127.0.0.1", 1080)
     assert (proxy.username, proxy.password) == ("user", "secret")
     assert proxy.url == "socks5://127.0.0.1:1080"
     # The password is not exposed by repr, so it stays out of logs.
@@ -750,7 +750,7 @@ def test_empty_proxy_values_fall_back_to_defaults(tmp_path: Path) -> None:
         tmp_path,
         """
 [proxy]
-enable = false
+enabled = false
 type = ""
 host = ""
 port = 0
@@ -767,15 +767,15 @@ password = ""
 @pytest.mark.parametrize(
     ("section", "message"),
     [
-        ('[proxy]\nenable = true\ntype = "ftp"\nhost = "127.0.0.1"', "Invalid proxy.type"),
-        ("[proxy]\nenable = true", "proxy.host is required"),
+        ('[proxy]\nenabled = true\ntype = "ftp"\nhost = "127.0.0.1"', "Invalid proxy.type"),
+        ("[proxy]\nenabled = true", "proxy.host is required"),
         (
-            '[proxy]\nenable = true\nhost = "http://127.0.0.1"',
+            '[proxy]\nenabled = true\nhost = "http://127.0.0.1"',
             "Invalid proxy.host",
         ),
-        ('[proxy]\nenable = true\nhost = "127.0.0.1"\nport = 70000', "Invalid proxy.port"),
+        ('[proxy]\nenabled = true\nhost = "127.0.0.1"\nport = 70000', "Invalid proxy.port"),
         (
-            '[proxy]\nenable = true\nhost = "127.0.0.1"\npassword = "secret"',
+            '[proxy]\nenabled = true\nhost = "127.0.0.1"\npassword = "secret"',
             "proxy.username is empty",
         ),
     ],
@@ -785,11 +785,23 @@ def test_invalid_proxy_settings(tmp_path: Path, section: str, message: str) -> N
         load_config(_proxy_config(tmp_path, section))
 
 
+def test_load_config_rejects_the_old_proxy_enable_spelling(tmp_path: Path) -> None:
+    config_path = _proxy_config(tmp_path, '[proxy]\nenable = true\nhost = "127.0.0.1"')
+
+    # Silently ignoring it would leave the proxy off without telling anyone.
+    # The hint has to be valid TOML: "true", not Python's "True".
+    with pytest.raises(ValueError, match="rename the key, e.g. enabled = true."):
+        load_config(config_path)
+
+    with pytest.raises(ValueError, match="renamed to enabled"):
+        format_config(config_path)
+
+
 def test_invalid_proxy_settings_ignored_while_disabled(tmp_path: Path) -> None:
     # Nothing is validated until the proxy is switched on.
-    config = load_config(_proxy_config(tmp_path, '[proxy]\nenable = false\ntype = "ftp"'))
+    config = load_config(_proxy_config(tmp_path, '[proxy]\nenabled = false\ntype = "ftp"'))
 
-    assert config.proxy.enable is False
+    assert config.proxy.enabled is False
 
 
 def test_format_rejects_invalid_config(tmp_path: Path) -> None:

@@ -79,7 +79,7 @@ class MailgunConfig:
 class ProxyConfig:
     """Outgoing proxy for every API request (GitHub, GitLab, Mailgun)."""
 
-    enable: bool = False
+    enabled: bool = False
     #: "http" or "socks5".
     type: str = "http"
     host: str = ""
@@ -170,7 +170,7 @@ _DEFAULT_SETTINGS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     (
         "proxy",
         (
-            ("enable", "false"),
+            ("enabled", "false"),
             ("type", '"http"'),
             ("host", '""'),
             ("port", "8080"),
@@ -474,6 +474,12 @@ _OUTDATED_SETTINGS: tuple[tuple[str, str, str], ...] = (
         'has been renamed to api_url; rename the key, e.g. api_url = "{value}".',
     ),
     (
+        "proxy",
+        "enable",
+        'has been renamed to enabled, matching [mailgun] enabled; rename the key, '
+        "e.g. enabled = {value}.",
+    ),
+    (
         "gitlab",
         "base_url",
         "belongs to the product it applies to now: remove it from [gitlab], which only "
@@ -494,14 +500,18 @@ def reject_outdated_settings(raw: dict) -> None:
     for section, key, hint in _OUTDATED_SETTINGS:
         values = raw.get(section)
         if isinstance(values, dict) and key in values:
-            raise ValueError(f"[{section}] {key} " + hint.format(value=values[key]))
+            value = values[key]
+            # TOML spells booleans in lowercase, so the hint stays copy-pasteable.
+            if isinstance(value, bool):
+                value = "true" if value else "false"
+            raise ValueError(f"[{section}] {key} " + hint.format(value=value))
 
 
 def load_proxy_config(raw: dict) -> ProxyConfig:
     """Read the [proxy] section; an empty/missing section means no proxy."""
     proxy_raw = raw.get("proxy", {})
     proxy = ProxyConfig(
-        enable=bool(proxy_raw.get("enable", False)),
+        enabled=bool(proxy_raw.get("enabled", False)),
         # Empty values mean "the default", as everywhere else in the config.
         type=(proxy_raw.get("type") or "http").lower(),
         host=(proxy_raw.get("host") or "").strip(),
@@ -514,13 +524,13 @@ def load_proxy_config(raw: dict) -> ProxyConfig:
 
 
 def validate_proxy(proxy: ProxyConfig) -> None:
-    if not proxy.enable:
+    if not proxy.enabled:
         return
     if proxy.type not in SUPPORTED_PROXY_TYPES:
         supported = ", ".join(SUPPORTED_PROXY_TYPES)
         raise ValueError(f"Invalid proxy.type {proxy.type!r}: expected one of {supported}.")
     if not proxy.host:
-        raise ValueError("proxy.host is required when proxy.enable is true.")
+        raise ValueError("proxy.host is required when proxy.enabled is true.")
     # A scheme in host would end up duplicated in the proxy URL.
     if "://" in proxy.host or "/" in proxy.host:
         raise ValueError(

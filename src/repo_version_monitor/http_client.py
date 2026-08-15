@@ -23,7 +23,7 @@ def new_async_client(
     the HTTP_PROXY/HTTPS_PROXY environment variables. With one, the configured
     proxy is used for every request and the environment is ignored.
     """
-    if proxy is None or not proxy.enable:
+    if proxy is None or not proxy.enabled:
         return httpx.AsyncClient(timeout=timeout)
 
     # An explicit transport (rather than the proxy argument) keeps httpx from
@@ -39,7 +39,7 @@ def new_async_client(
 
 def describe(proxy: ProxyConfig | None) -> str:
     """One-line proxy summary for command output."""
-    if proxy is None or not proxy.enable:
+    if proxy is None or not proxy.enabled:
         return "not set (direct connection or *_PROXY environment variables)"
     auth = " (authenticated)" if proxy.username else ""
     return f"{proxy.url}{auth}"

@@ -28,7 +28,7 @@ export MAILGUN_API_KEY="key-xxx"
 
 ```toml
 [proxy]
-enable = false
+enabled = false
 # "http" 或 "socks5"
 type = "http"
 host = ""
@@ -40,8 +40,8 @@ password = ""
 
 - `host` 只写主机名或 IP，协议由 `type` 决定，写成 `http://127.0.0.1` 会报错；
 - `username` 为空时按免认证处理，只填 `password` 会报错；
-- `enable = false` 时不做任何校验，其余字段填错也不影响运行；
-- `enable = false` 时保持 httpx 默认行为，仍然尊重 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 环境变量；`enable = true` 时一律使用配置里的代理，忽略环境变量；
+- `enabled = false` 时不做任何校验，其余字段填错也不影响运行；
+- `enabled = false` 时保持 httpx 默认行为，仍然尊重 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 环境变量；`enabled = true` 时一律使用配置里的代理，忽略环境变量；
 - socks5 下 DNS 解析同样走代理：目标域名原样发给代理，由代理所在网络解析，本机不做解析。
 
 `check` 与 `mailtest` 会打印当前生效的代理，便于确认：
@@ -343,6 +343,7 @@ uv run --extra dev pytest tests/ -q
 | --- | --- | --- |
 | `[mailgun] base_url` | `[mailgun] api_url` | 同名不同义，按用途改名。EU 账号填 `https://api.eu.mailgun.net/v3` |
 | `[gitlab] base_url` / `[gitlab] external_url` | `[[products]] external_url` | 实例地址下放到产品级，从而支持同时监控多个自建实例 |
+| `[proxy] enable` | `[proxy] enabled` | 与 `[mailgun] enabled` 统一：配置描述状态，用形容词形式 |
 
 旧写法不会被静默忽略——那样会悄悄回退到默认值，把请求发去错误的地址。`load_config` 和 `format` 都会报错并提示新写法（附带原值方便直接复制）：
 

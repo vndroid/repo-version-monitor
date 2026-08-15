@@ -32,7 +32,7 @@ notify_on_first_seen = false
 [proxy]
 # Proxy for every outgoing request (GitHub, GitLab, Mailgun). When disabled,
 # the HTTP_PROXY/HTTPS_PROXY environment variables still apply as usual.
-enable = false
+enabled = false
 # "http" or "socks5".
 type = "http"
 host = ""
