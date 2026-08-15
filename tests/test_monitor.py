@@ -74,17 +74,22 @@ def test_self_managed_products_get_their_own_client(tmp_path: Path) -> None:
     assert monitor.client_for(other).token is None
 
 
-def test_product_key_and_label_include_the_instance() -> None:
+def test_product_key_ignores_the_suffix_but_the_label_shows_it() -> None:
     product = ProductConfig(
         name="internal",
         repository="team/app",
         branch="v13",
         provider="gitlab",
         external_url="https://git.mycorp.com",
+        suffix="-ee",
     )
 
+    # Changing the suffix must not change the key, or the history would reset.
     assert product_key(product) == ("gitlab", "https://git.mycorp.com", "team/app", "v13")
-    assert product_label(product) == "gitlab:git.mycorp.com/team/app@v13"
+    assert product_key(product) == product_key(
+        ProductConfig(**{**product.__dict__, "suffix": None})
+    )
+    assert product_label(product) == "gitlab:git.mycorp.com/team/app@v13 (-ee)"
     assert product_key(ProductConfig("httpx", "encode/httpx")) == (
         "github",
         "",

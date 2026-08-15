@@ -110,6 +110,15 @@ def main() -> None:
         "--branch",
         help="Track a branch line, e.g. v13: only tags starting with 'v13' or '13' are considered.",
     )
+    add_parser.add_argument(
+        "--suffix",
+        help=(
+            "Tag suffix to track: only tags like v19.2.2-ee are considered, without it "
+            'only plain version tags are. Separate alternatives with "|", most '
+            "preferred first: -ee|-ce. Write it as --suffix=-ee, since the value "
+            "starts with a dash."
+        ),
+    )
 
     delete_parser = subparsers.add_parser("delete", help="Delete a product from the config.")
     delete_parser.add_argument("--name", help="Select by product name; errors if ambiguous.")
@@ -197,13 +206,16 @@ def main() -> None:
                 provider,
                 parsed.external_url,
                 args.token,
+                args.suffix,
             )
         except ValueError as exc:
             add_parser.error(str(exc))
-        suffix = f", branch {args.branch}" if args.branch else ""
+        details = f", branch {args.branch}" if args.branch else ""
+        if args.suffix:
+            details += f", suffix {args.suffix}"
         prefix = f"{provider}:" if provider != DEFAULT_PROVIDER else ""
         location = f"{url_host(parsed.external_url)}/" if parsed.external_url else ""
-        print(f"Added {name} ({prefix}{location}{repository}{suffix}) to {args.config}.")
+        print(f"Added {name} ({prefix}{location}{repository}{details}) to {args.config}.")
         if args.provider is None and parsed.inferred_from_host and provider != DEFAULT_PROVIDER:
             print(f"Provider {provider} inferred from host {parsed.host}.")
         if parsed.external_url:
@@ -228,6 +240,8 @@ def main() -> None:
         if product.external_url:
             repository = f"{url_host(product.external_url)}/{repository}"
         label = f"{repository}, branch {product.branch}" if product.branch else repository
+        if product.suffix:
+            label = f"{label}, suffix {product.suffix}"
         if product.provider != DEFAULT_PROVIDER:
             label = f"{product.provider}:{label}"
         print(f"Deleted {product.name} ({label}) from {args.config}.")
@@ -266,6 +280,7 @@ def main() -> None:
 
         _sync_config_hash(args.config)
         store = VersionStore(resolve_database_path(args.config))
+        # Keyed exactly like product_key(), so stored rows line up with the config.
         stored_by_product = {
             (product.provider, product.external_url, product.repository, product.branch): product
             for product in store.list_products()
@@ -296,12 +311,13 @@ def main() -> None:
                     product.provider,
                     repository_cell(product),
                     product.branch or "-",
+                    product.suffix or "-",
                     latest_tag,
                 )
             )
 
         for line in _render_table(
-            ("ID", "NAME", "PROVIDER", "REPOSITORY", "BRANCH", "LATEST"), rows
+            ("ID", "NAME", "PROVIDER", "REPOSITORY", "BRANCH", "SUFFIX", "LATEST"), rows
         ):
             print(line)
         return

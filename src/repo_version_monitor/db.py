@@ -9,7 +9,9 @@ import sqlite3
 _DEFAULT_PROVIDER = "github"
 
 # external_url is '' for the provider's public instance, so the same repository
-# path on two self-managed instances stays two independent records.
+# path on two self-managed instances stays two independent records. The tag
+# suffix is deliberately not part of the key: changing it keeps the history, so
+# the next check reports a normal update instead of starting over.
 _PRODUCTS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS products (
     provider TEXT NOT NULL DEFAULT 'github',

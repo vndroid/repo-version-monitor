@@ -45,6 +45,9 @@ password = ""
 # GitLab paths may include subgroups: group/subgroup/project.
 # external_url and token are only for self-managed GitLab instances (see the
 # last entry): leave them empty for github.com and gitlab.com projects.
+# suffix tracks tags carrying it, e.g. "-ee" for gitlab-org/gitlab; empty means
+# plain version tags such as v1.2.3. Several alternatives are separated by "|",
+# most preferred first: "-ee|-ce".
 [[products]]
 name = "httpx"
 provider = ""
@@ -52,6 +55,7 @@ external_url = ""
 token = ""
 repository = "encode/httpx"
 branch = ""
+suffix = ""
 
 [[products]]
 name = "FastAPI"
@@ -60,6 +64,7 @@ external_url = ""
 token = ""
 repository = "fastapi/fastapi"
 branch = ""
+suffix = ""
 
 [[products]]
 name = "gitlab-runner"
@@ -68,6 +73,16 @@ external_url = ""
 token = ""
 repository = "gitlab-org/gitlab-runner"
 branch = ""
+suffix = ""
+
+[[products]]
+name = "gitlab"
+provider = "gitlab"
+external_url = ""
+token = ""
+repository = "gitlab-org/gitlab"
+branch = ""
+suffix = "-ee"
 
 [[products]]
 name = "example"
@@ -76,3 +91,4 @@ external_url = "https://jihulab.com"
 token = ""
 repository = "example/project"
 branch = ""
+suffix = ""

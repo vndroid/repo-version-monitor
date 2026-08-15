@@ -27,7 +27,11 @@ logger = logging.getLogger(__name__)
 
 
 def product_key(product: ProductConfig) -> tuple[str, str, str, str | None]:
-    """Database key of a product: provider, instance, repository, branch."""
+    """Database key of a product: provider, instance, repository, branch.
+
+    The tag suffix is not part of it, so changing it in the config keeps the
+    stored version and the next check reports it as a normal update.
+    """
     return (product.provider, product.external_url or "", product.repository, product.branch)
 
 
@@ -37,7 +41,9 @@ def product_label(product: ProductConfig) -> str:
     if product.external_url:
         repository = f"{product.external_url.split('://', 1)[-1]}/{repository}"
     label = f"{repository}@{product.branch}" if product.branch else repository
-    return label if product.provider == "github" else f"{product.provider}:{label}"
+    if product.provider != "github":
+        label = f"{product.provider}:{label}"
+    return f"{label} ({product.suffix})" if product.suffix else label
 
 
 class VersionMonitor:
@@ -91,6 +97,7 @@ class VersionMonitor:
             for product in products:
                 repo, branch, provider = product.repository, product.branch, product.provider
                 instance = product.external_url or ""
+                suffix = product.suffix or ""
                 label = product_label(product)
                 # One failing repository must not abort checks for the rest.
                 try:
@@ -106,7 +113,7 @@ class VersionMonitor:
                     continue
 
                 # The API's list order is unreliable; pick the highest version tag.
-                latest = pick_latest_version_tag(tags)
+                latest = pick_latest_version_tag(tags, suffix)
                 if latest is None:
                     logger.warning(
                         "No version-like tags for %s; falling back to the first listed tag.",

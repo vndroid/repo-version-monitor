@@ -10,6 +10,20 @@ import httpx
 # like "flash-with-wbuf-stack" or "with-deprecated-diskstore".
 _VERSION_TAG_PATTERN = re.compile(r"^v?(\d+(?:\.\d+)*)$")
 
+#: Separator for a product's suffix alternatives: "-ee|-ce".
+SUFFIX_SEPARATOR = "|"
+
+
+def split_suffixes(suffix: str | None) -> list[str]:
+    """Suffix alternatives, most preferred first.
+
+    "-ee|-ce" tracks both editions of one repository; when both carry the same
+    version, the one listed first wins.
+    """
+    if not suffix:
+        return []
+    return [part for part in suffix.split(SUFFIX_SEPARATOR) if part]
+
 
 @dataclass(frozen=True)
 class Tag:
@@ -39,21 +53,55 @@ def normalize_tag_name(name: str) -> str:
     return name
 
 
-def pick_latest_version_tag(tags: list[Tag]) -> Tag | None:
-    """Pick the highest version-like tag by numeric comparison.
+def parse_version_tag(name: str, suffix: str = "") -> tuple[tuple[int, ...], int] | None:
+    """Sort key of a release tag, or None when it is not one.
+
+    Repositories that release several editions tag them with a fixed suffix
+    (GitLab: v19.2.2-ee). Configure it per product, several alternatives
+    separated by "|": a tag must carry one of them, and what remains after
+    stripping it must be a plain version. Prereleases never survive this,
+    "v19.2.0-rc44-ee" minus "-ee" leaves "v19.2.0-rc44", which is not a version.
+
+    The key is (version numbers, suffix priority), so the same version tagged
+    for two editions resolves to the alternative listed first.
+    """
+    alternatives = split_suffixes(suffix)
+    if not alternatives:
+        version = _plain_version(name)
+        return None if version is None else (version, 0)
+
+    for index, alternative in enumerate(alternatives):
+        if not name.endswith(alternative):
+            continue
+        version = _plain_version(name[: -len(alternative)])
+        if version is not None:
+            return version, len(alternatives) - index
+    return None
+
+
+def _plain_version(name: str) -> tuple[int, ...] | None:
+    match = _VERSION_TAG_PATTERN.match(name)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.group(1).split("."))
+
+
+def pick_latest_version_tag(tags: list[Tag], suffix: str = "") -> Tag | None:
+    """Pick the highest release tag by numeric comparison.
 
     Tag list order from provider APIs is unreliable, and repositories may
     carry non-version tags; relying on list order picks the wrong tag.
-    Returns None when no tag looks like a version.
+    Only tags carrying one of the ``suffix`` alternatives are considered;
+    without one, only plain version tags are. Returns None when no tag looks
+    like a release version.
     """
-    best: tuple[tuple[int, ...], Tag] | None = None
+    best: tuple[tuple[tuple[int, ...], int], Tag] | None = None
     for tag in tags:
-        match = _VERSION_TAG_PATTERN.match(tag.name)
-        if not match:
+        parsed = parse_version_tag(tag.name, suffix)
+        if parsed is None:
             continue
-        version = tuple(int(part) for part in match.group(1).split("."))
-        if best is None or version > best[0]:
-            best = (version, tag)
+        if best is None or parsed > best[0]:
+            best = (parsed, tag)
     return best[1] if best else None
 
 

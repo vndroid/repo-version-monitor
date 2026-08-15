@@ -69,7 +69,60 @@ Proxy: socks5://127.0.0.1:1080 (authenticated)
 
 `[gitlab]` 段只针对官方的 gitlab.com 实例，其中只有 `token` 一项。
 
+### 版本号识别规则
+
+API 返回的顺序不可靠，程序会在全部标签里挑数值最大的**正式版本**。默认只认纯版本号：
+
+| 标签                                    | 结果     | 说明                                                |
+|-----------------------------------------|----------|-----------------------------------------------------|
+| `v1.2.3` / `1.2.3`                      | 参与比较 | `v` 前缀可有可无，按数值比较，`1.10.0` 高于 `1.9.0` |
+| `1.7.0-rc1`、`v11.3.0.pre`、`v1.2.3-ee` | 忽略     | 带任何后缀都不算纯版本号                            |
+| `flash-with-wbuf-stack`                 | 忽略     | 不是版本号                                          |
+
+有些项目的正式版本天生带后缀，此时用产品级的 `suffix` 指定，详见[版本后缀 suffix](#版本后缀-suffix)。
+
 同一仓库路径在不同 provider、不同实例下互不冲突，会被视为彼此独立的记录。
+
+### 版本后缀 suffix
+
+有些项目的正式版本号带固定后缀，典型的是 GitLab：`gitlab-org/gitlab` 自 12.0 CE/EE 合并后**只打 `-ee` 标签**（`v19.2.2-ee`），纯版本号 tag 停在 2018 年的 `v11.2.2`。这类项目用产品级的 `suffix` 指定要跟踪的后缀：
+
+```toml
+[[products]]
+name = "gitlab"
+provider = "gitlab"
+external_url = ""
+token = ""
+repository = "gitlab-org/gitlab"
+branch = ""
+suffix = "-ee"
+```
+
+规则很简单：**先按后缀筛选，再比较版本号**。
+
+- 只有以该后缀结尾的标签参与比较，去掉后缀后剩下的部分必须是纯版本号；
+- 因此 `v19.2.2-ee` 参与比较（剩 `v19.2.2`），而 `v19.2.0-rc44-ee` 不会（剩 `v19.2.0-rc44`），预发布依旧被自然排除；
+- 留空表示只认纯版本号 `v1.2.3`，与旧行为一致；
+- 记录和邮件里保留标签原名（去掉 `v` 前缀），即 `19.2.2-ee`。
+
+#### 同时跟踪多个后缀
+
+用 `|` 分隔多个后缀，**靠前的优先**：
+
+```toml
+suffix = "-ee|-ce"
+```
+
+含义是「以 `-ee` 或 `-ce` 结尾的标签都参与比较」，因此同一个产品可以同时盯企业版和社区版，取两者中版本号最大的那个。版本号相同时（`v19.2.3-ee` 与 `v19.2.3-ce` 并存）取写在前面的 `-ee`，把顺序写成 `-ce|-ee` 则相反。
+
+注意每个分隔出来的部分都是**字面后缀**而不是正则片段：`.` 就是点本身，不会当成通配符，因此 `.Final` 只匹配 `.Final`。写空的分支（`-ee|`、`-ee||-ce`）会报错，多半是笔误。
+
+`list` 的 `SUFFIX` 列会显示每条记录跟踪的后缀，未配置显示 `-`。
+
+**suffix 不属于产品身份**：它只决定读取同一个仓库的哪些标签，因此不参与配置去重，也不在数据库主键里。带来两个后果：
+
+- 给已有产品加上或改掉 suffix 时，数据库里的记录照旧沿用。例如 `gitlab` 原先记的是 `11.2.2`，配上 `suffix = "-ee"` 后下次检查会作为一次正常更新处理，收到一封 `11.2.2 → 19.2.3-ee` 的邮件；
+- 同一仓库（同 provider、同实例、同 branch）在配置里只能出现一次。要同时跟踪多个后缀不必加第二条记录，写成 `suffix = "-ee|-ce"` 即可，见上。
 
 ### self-managed GitLab 实例
 
@@ -115,7 +168,7 @@ uv run repo-version-monitor --config config.toml format
 
 1. 校验格式是否合法；
 2. **补全缺失的配置项**：`[database]`、`[github]`、`[gitlab]`、`[mailgun]`、`[monitor]`、`[proxy]` 各段中缺失的键会补上默认值，整段缺失时补上整段。已有的值、键顺序和注释都原样保留，只在所属段末尾追加缺失项，命令执行后会列出补了哪些项；
-3. 规范化所有 `[[products]]` 块，产品之间留空行，为未配置 `provider`、`branch` 的产品补空值。
+3. 规范化所有 `[[products]]` 块，产品之间留空行，为未配置 `provider`、`external_url`、`token`、`branch`、`suffix` 的产品补空值。
 
 补全时字符串类配置一律写成空值 `""`，含义是"用内置默认值"，因此不必手填也不会覆盖你已经写好的值：
 
@@ -127,6 +180,7 @@ uv run repo-version-monitor --config config.toml format
 | `github.token` / `gitlab.token` / `mailgun.api_key` | 视为未设置，回退到环境变量 |
 | `products.external_url` | 官方实例（github.com / gitlab.com） |
 | `products.token` | 匿名访问该实例 |
+| `products.suffix` | 只认纯版本号 `v1.2.3` |
 | `mailgun.api_url` | `https://api.mailgun.net/v3` |
 | `proxy.type` | `http` |
 | `proxy.port` | `8080` |
@@ -198,6 +252,16 @@ uv run repo-version-monitor --config config.toml add https://jihulab.com/gitlab-
 
 两者都给且域名不一致时报错退出。`--external-url` 指向公开实例（如 `gitlab.com`）时视为官方实例，不会写进配置。
 
+#### `--suffix` 参数（版本后缀）
+
+```bash
+uv run repo-version-monitor --config config.toml add gitlab.com/gitlab-org/gitlab --suffix=-ee
+
+## 多个后缀用 | 分隔，靠前的优先
+uv run repo-version-monitor --config config.toml add gitlab.com/gitlab-org/gitlab --suffix='-ee|-ce'
+```
+
+注意要写成 `--suffix=-ee` 这种等号形式：值以 `-` 开头，写成 `--suffix -ee` 会被 argparse 当成另一个选项；含 `|` 时记得加引号，否则会被 shell 当作管道。含义见[版本后缀 suffix](#版本后缀-suffix)。
 
 ### 修改追踪分支
 
@@ -227,7 +291,7 @@ uv run repo-version-monitor --config config.toml delete --name grafana [--reposi
 uv run repo-version-monitor --config config.toml list
 ```
 
-默认按产品名排序（不区分大小写，等同 `--sort-by-name`）；加 `--sort-by-repository` 可改为按 repository（次级按 branch）排序，两个参数互斥。输出中的 `PROVIDER` 列标明每条记录来自哪个供应商；self-managed 实例上的项目在 `REPOSITORY` 列带上实例域名（如 `jihulab.com/example/project`），与 `add` 的写法一致。
+默认按产品名排序（不区分大小写，等同 `--sort-by-name`）；加 `--sort-by-repository` 可改为按 repository（次级按 branch）排序，两个参数互斥。输出中的 `PROVIDER` 列标明每条记录来自哪个供应商，`SUFFIX` 列标明跟踪的版本后缀（未配置显示 `-`）；self-managed 实例上的项目在 `REPOSITORY` 列带上实例域名（如 `jihulab.com/example/project`），与 `add` 的写法一致。
 
 ### 发送测试邮件
 
@@ -293,7 +357,7 @@ uv run --extra dev pytest tests/ -q
 
 ### 数据库自动迁移
 
-`products`、`tag_events` 两张表的主键为 `(provider, external_url, repository, branch)`，其中 `external_url` 为空串表示官方实例——因此同一仓库路径在两个自建实例上是两条独立记录，版本不会互相覆盖。
+`products`、`tag_events` 两张表的主键为 `(provider, external_url, repository, branch)`，其中 `external_url` 为空串表示官方实例——因此同一仓库路径在两个自建实例上是两条独立记录，版本不会互相覆盖。`suffix` 不在主键里，改动它不会重置已记录的版本。
 
 旧数据库在下次运行时自动迁移，缺失的列按当时的语义补齐（`provider` 记为 `github`，`external_url` 记为官方实例），无需手动处理，也不会丢失历史事件。
 

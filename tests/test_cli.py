@@ -5,6 +5,7 @@ import pytest
 
 from repo_version_monitor.cli import _render_table, main
 from repo_version_monitor.config import load_products
+from repo_version_monitor.db import VersionStore
 
 
 def _run_add(config_path: Path, monkeypatch, *add_args: str) -> None:
@@ -186,6 +187,70 @@ def test_delete_disambiguates_by_instance(tmp_path: Path, capsys, monkeypatch) -
     assert remaining[0].external_url is None
 
 
+def test_add_with_suffix_and_list_column(tmp_path: Path, capsys, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    _run_add(
+        config_path,
+        monkeypatch,
+        "https://gitlab.com/gitlab-org/gitlab",
+        # The value starts with a dash, so argparse needs the '=' form.
+        "--suffix=-ee",
+    )
+
+    assert load_products(config_path)[0].suffix == "-ee"
+    assert "suffix -ee" in capsys.readouterr().out
+
+    monkeypatch.setattr(
+        sys, "argv", ["repo-version-monitor", "--config", str(config_path), "list"]
+    )
+    main()
+
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].split() == [
+        "ID", "NAME", "PROVIDER", "REPOSITORY", "BRANCH", "SUFFIX", "LATEST"
+    ]
+    assert lines[1].split()[:6] == [
+        "01", "gitlab", "gitlab", "gitlab-org/gitlab", "-", "-ee"
+    ]
+
+
+def test_list_shows_stored_latest_tags(tmp_path: Path, capsys, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[database]
+path = "versions.sqlite3"
+
+[[products]]
+name = "gitlab"
+provider = "gitlab"
+repository = "gitlab-org/gitlab"
+suffix = "-ee"
+
+[[products]]
+name = "httpx"
+repository = "encode/httpx"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    store = VersionStore(tmp_path / "versions.sqlite3")
+    store.initialize()
+    store.upsert_product("gitlab", "gitlab-org/gitlab", "19.2.3-ee", provider="gitlab")
+    store.upsert_product("httpx", "encode/httpx", "0.28.1")
+    monkeypatch.setattr(
+        sys, "argv", ["repo-version-monitor", "--config", str(config_path), "list"]
+    )
+
+    main()
+
+    # The stored rows must line up with the config entries, suffix included.
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[1].split()[-1] == "19.2.3-ee"
+    assert lines[2].split()[-1] == "0.28.1"
+
+
 def test_add_unknown_host_without_provider_exits(tmp_path: Path, capsys, monkeypatch) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text("", encoding="utf-8")
@@ -245,7 +310,9 @@ repository = "fastapi/fastapi"
     main()
 
     lines = capsys.readouterr().out.splitlines()
-    assert lines[0].split() == ["ID", "NAME", "PROVIDER", "REPOSITORY", "BRANCH", "LATEST"]
+    assert lines[0].split() == [
+        "ID", "NAME", "PROVIDER", "REPOSITORY", "BRANCH", "SUFFIX", "LATEST"
+    ]
     # case-insensitive sort by name: FastAPI before zlib, ids zero-padded from 01
     assert lines[1].split()[:5] == ["01", "FastAPI", "github", "fastapi/fastapi", "-"]
     assert lines[2].split()[:5] == ["02", "zlib", "github", "madler/zlib", "-"]

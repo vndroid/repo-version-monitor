@@ -162,6 +162,7 @@ external_url = "https://jihulab.com"
 token = "glpat-inline"
 repository = "example/project"
 branch = ""
+suffix = ""
 """.strip()
     )
     product = load_products(config_path)[0]
@@ -209,6 +210,61 @@ def test_product_token_requires_external_url(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="token requires external_url"):
         add_product_to_config(config_path, "x", "a/b", provider="gitlab", token="glpat-x")
+
+
+def test_add_product_with_suffix_round_trip(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    add_product_to_config(
+        config_path, "gitlab", "gitlab-org/gitlab", provider="gitlab", suffix="-ee"
+    )
+
+    assert 'suffix = "-ee"' in config_path.read_text(encoding="utf-8")
+    assert load_products(config_path)[0].suffix == "-ee"
+
+
+def test_suffix_does_not_make_a_second_product(tmp_path: Path) -> None:
+    # The suffix selects which tags to read, it is not part of the identity:
+    # the same repository can only be tracked once per branch and instance.
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    add_product_to_config(config_path, "ee", "acme/tool", provider="gitlab", suffix="-ee")
+    with pytest.raises(ValueError, match="already configured"):
+        add_product_to_config(config_path, "ce", "acme/tool", provider="gitlab", suffix="-ce")
+
+    assert len(load_products(config_path)) == 1
+
+
+def test_add_product_with_several_suffixes(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    add_product_to_config(
+        config_path, "gitlab", "gitlab-org/gitlab", provider="gitlab", suffix="-ee|-ce"
+    )
+
+    assert load_products(config_path)[0].suffix == "-ee|-ce"
+
+
+@pytest.mark.parametrize("suffix", ["-e e", "-ee!", "后缀", "-ee|", "|", "-ee||-ce"])
+def test_add_product_rejects_invalid_suffix(tmp_path: Path, suffix: str) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Invalid suffix"):
+        add_product_to_config(config_path, "x", "a/b", suffix=suffix)
+
+
+def test_empty_suffix_reads_back_as_none(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[[products]]\nname = "httpx"\nrepository = "encode/httpx"\nsuffix = ""\n',
+        encoding="utf-8",
+    )
+
+    assert load_products(config_path)[0].suffix is None
 
 
 def test_load_config_reads_gitlab_section(tmp_path: Path, monkeypatch) -> None:
@@ -335,6 +391,7 @@ external_url = ""
 token = ""
 repository = "gitlab-org/gitlab-runner"
 branch = ""
+suffix = ""
 """.lstrip()
     )
     assert load_products(config_path)[0].provider == "gitlab"
@@ -508,6 +565,7 @@ external_url = ""
 token = ""
 repository = "encode/httpx"
 branch = ""
+suffix = ""
 
 [[products]]
 name = "pg13"
@@ -516,6 +574,7 @@ external_url = ""
 token = ""
 repository = "postgres/postgres"
 branch = "v13"
+suffix = ""
 """.lstrip()
     )
 

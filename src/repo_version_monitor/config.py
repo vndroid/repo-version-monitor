@@ -8,7 +8,12 @@ from pathlib import Path
 import re
 import tomllib
 
-from repo_version_monitor.providers import DEFAULT_PROVIDER, SUPPORTED_PROVIDERS
+from repo_version_monitor.providers import (
+    DEFAULT_PROVIDER,
+    SUFFIX_SEPARATOR,
+    SUPPORTED_PROVIDERS,
+    split_suffixes,
+)
 from repo_version_monitor.repo_url import normalize_external_url, url_host
 
 logger = logging.getLogger(__name__)
@@ -17,6 +22,9 @@ _REPOSITORY_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 # GitLab projects may be nested under subgroups: group/subgroup/project.
 _GITLAB_REPOSITORY_PATTERN = re.compile(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+")
 _PRODUCT_NAME_PATTERN = re.compile(r"[A-Za-z0-9_.-]+")
+# One tag suffix such as "-ee" or ".Final": whatever trails the version numbers.
+# Several alternatives are separated by SUFFIX_SEPARATOR: "-ee|-ce".
+_SUFFIX_PATTERN = re.compile(r"[A-Za-z0-9_.+-]+")
 # http(s)://host[:port][/path] — GitLab may live under a relative URL root.
 _EXTERNAL_URL_PATTERN = re.compile(
     r"https?://[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*(?::\d{1,5})?(?:/[A-Za-z0-9_.~-]+)*"
@@ -33,6 +41,8 @@ class ProductConfig:
     external_url: str | None = None
     #: Token for that self-managed instance; optional.
     token: str | None = field(default=None, repr=False)
+    #: Tag suffix to track, e.g. "-ee"; None tracks plain version tags.
+    suffix: str | None = None
 
 
 @dataclass(frozen=True)
@@ -117,6 +127,7 @@ def add_product_to_config(
     provider: str = DEFAULT_PROVIDER,
     external_url: str | None = None,
     token: str | None = None,
+    suffix: str | None = None,
 ) -> None:
     product = ProductConfig(
         name=name,
@@ -125,6 +136,7 @@ def add_product_to_config(
         provider=provider,
         external_url=normalize_external_url(external_url) if external_url else None,
         token=token or None,
+        suffix=suffix or None,
     )
     validate_product(product)
 
@@ -287,6 +299,7 @@ def edit_product_branch(
         provider=target.provider,
         external_url=target.external_url,
         token=target.token,
+        suffix=target.suffix,
     )
     if any(
         _product_key(product) == _product_key(updated)
@@ -351,7 +364,11 @@ def delete_product(
 
 
 def _product_key(product: ProductConfig) -> tuple[str, str, str, str | None]:
-    """What makes a product unique: same path on two instances is two products."""
+    """What makes a product unique: same path on two instances is two products.
+
+    The tag suffix is not part of it: it selects which tags of the same
+    repository to read, so changing it keeps the recorded history.
+    """
     return (product.provider, product.external_url or "", product.repository, product.branch)
 
 
@@ -362,7 +379,7 @@ def _product_label(product: ProductConfig) -> str:
     label = f"{repository}@{product.branch}" if product.branch else repository
     if product.provider != DEFAULT_PROVIDER:
         label = f"{product.provider}:{label}"
-    return label
+    return f"{label} ({product.suffix})" if product.suffix else label
 
 
 def _product_block(product: ProductConfig) -> str:
@@ -376,6 +393,7 @@ def _product_block(product: ProductConfig) -> str:
         f'token = "{_escape_toml_string(product.token or "")}"\n'
         f'repository = "{product.repository}"\n'
         f'branch = "{_escape_toml_string(product.branch or "")}"\n'
+        f'suffix = "{_escape_toml_string(product.suffix or "")}"\n'
     )
 
 
@@ -429,6 +447,7 @@ def load_products(path: Path) -> list[ProductConfig]:
             provider=item.get("provider") or DEFAULT_PROVIDER,
             external_url=normalize_external_url(external_url) if external_url else None,
             token=item.get("token") or None,
+            suffix=item.get("suffix") or None,
         )
         validate_product(product)
         products.append(product)
@@ -623,10 +642,26 @@ def validate_product(product: ProductConfig) -> None:
             f"Product {product.name!r}: token is only used for self-managed instances; "
             f"the {DEFAULT_PROVIDER} token belongs in the [{DEFAULT_PROVIDER}] section."
         )
+    if product.suffix is not None:
+        validate_suffix(product.suffix)
     if product.token and product.external_url is None:
         raise ValueError(
             f"Product {product.name!r}: token requires external_url; the token for the "
             f"public instance belongs in the [{product.provider}] section."
+        )
+
+
+def validate_suffix(suffix: str) -> None:
+    alternatives = split_suffixes(suffix)
+    valid = alternatives and all(
+        _SUFFIX_PATTERN.fullmatch(alternative) for alternative in alternatives
+    )
+    # Rejects empty alternatives too ("-ee|" or "-ee||-ce"), which read as typos.
+    if not valid or len(alternatives) != len(suffix.split(SUFFIX_SEPARATOR)):
+        raise ValueError(
+            f"Invalid suffix {suffix!r}: only letters (A-Z, a-z), digits, "
+            f"'-', '_', '.' and '+' are allowed, e.g. \"-ee\"; separate "
+            f'alternatives with "{SUFFIX_SEPARATOR}", e.g. "-ee{SUFFIX_SEPARATOR}-ce".'
         )
 
 

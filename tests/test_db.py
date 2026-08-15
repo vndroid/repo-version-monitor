@@ -264,6 +264,18 @@ def test_migrates_pre_external_url_schema(tmp_path) -> None:
     assert (events[0].product_name, events[0].external_url) == ("tool13", "")
 
 
+def test_changing_the_tag_suffix_keeps_the_stored_version(tmp_path) -> None:
+    # The suffix is not part of the key, so switching a product from plain
+    # tags to "-ee" reports 11.2.2 -> 19.2.3-ee instead of starting over.
+    store = VersionStore(tmp_path / "versions.sqlite3")
+    store.initialize()
+    store.upsert_product("gitlab", "gitlab-org/gitlab", "11.2.2", provider="gitlab")
+
+    stored = store.get_product("gitlab-org/gitlab", provider="gitlab")
+
+    assert stored is not None and stored.latest_tag == "11.2.2"
+
+
 def test_migrates_pre_provider_schema(tmp_path) -> None:
     import sqlite3
 
