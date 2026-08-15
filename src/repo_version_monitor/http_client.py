@@ -7,9 +7,13 @@ resolved on the proxy side.
 
 from __future__ import annotations
 
+import logging
+
 import httpx
 
 from repo_version_monitor.config import ProxyConfig
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 30.0
 
@@ -23,6 +27,7 @@ def new_async_client(
     the HTTP_PROXY/HTTPS_PROXY environment variables. With one, the configured
     proxy is used for every request and the environment is ignored.
     """
+    logger.debug("New HTTP client: proxy %s, timeout %.0fs", describe(proxy), timeout)
     if proxy is None or not proxy.enabled:
         return httpx.AsyncClient(timeout=timeout)
 

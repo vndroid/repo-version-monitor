@@ -1,3 +1,4 @@
+import logging
 import sys
 from pathlib import Path
 
@@ -288,6 +289,185 @@ def test_add_conflicting_provider_exits(tmp_path: Path, capsys, monkeypatch) -> 
         _run_add(config_path, monkeypatch, "gitlab.com/a/b", "--provider", "github")
 
     assert "conflicts with host" in capsys.readouterr().err
+
+
+def _verbose_config(tmp_path: Path) -> Path:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[database]
+path = "versions.sqlite3"
+
+[mailgun]
+enabled = false
+
+[[products]]
+name = "httpx"
+repository = "encode/httpx"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    return config_path
+
+
+@pytest.mark.parametrize("flags", [["--verbose"], ["-vv"], ["-v", "-v"]])
+def test_verbose_logs_config_and_environment(
+    tmp_path: Path, caplog, monkeypatch, flags: list[str]
+) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    config_path = _verbose_config(tmp_path)
+    # Flags work after the subcommand as well as before it.
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["repo-version-monitor", "--config", str(config_path), "check", "--name", "nope", *flags],
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        main()
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert f"Reading config {config_path}" in messages
+    assert "config [mailgun]: enabled" in messages
+    assert "env GITHUB_TOKEN: not set" in messages
+    assert any(message.startswith("config [[products]]: name=httpx") for message in messages)
+    assert any(message.startswith("config database.path:") for message in messages)
+
+
+def test_single_v_stays_at_info(tmp_path: Path, caplog, monkeypatch) -> None:
+    config_path = _verbose_config(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["repo-version-monitor", "-v", "--config", str(config_path), "check", "--name", "nope"],
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        main()
+
+    assert logging.getLogger().level == logging.INFO
+    assert not [record for record in caplog.records if record.levelno == logging.DEBUG]
+
+
+def test_log_level_wins_over_verbose(tmp_path: Path, monkeypatch) -> None:
+    config_path = _verbose_config(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "repo-version-monitor", "--config", str(config_path),
+            "check", "--name", "nope", "--verbose", "--log-level", "error",
+        ],
+    )
+
+    main()
+
+    assert logging.getLogger().level == logging.ERROR
+
+
+def _check_output(config_path: Path, capsys, monkeypatch, *flags: str) -> list[str]:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["repo-version-monitor", "--config", str(config_path), "check", "--name", "httpx", *flags],
+    )
+    main()
+    return capsys.readouterr().out.splitlines()
+
+
+def test_check_reports_only_configured_sources(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("SMTP_PASSWORD", raising=False)
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[database]
+path = "versions.sqlite3"
+
+[github]
+token = "ghp_inline"
+
+[mailgun]
+enabled = false
+
+[proxy]
+enabled = true
+type = "socks5"
+host = "127.0.0.1"
+port = 1080
+
+[[products]]
+name = "httpx"
+repository = "encode/httpx"
+
+[[products]]
+name = "runner"
+provider = "gitlab"
+repository = "gitlab-org/gitlab-runner"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    lines = _check_output(config_path, capsys, monkeypatch)
+
+    assert "GitHub token: config github.token" in lines
+    assert "Proxy: socks5://127.0.0.1:1080" in lines
+    # No GitLab token and no mail channel: nothing to report, so no line at all.
+    assert not [line for line in lines if line.startswith("GitLab token")]
+    assert not [line for line in lines if "not set" in line]
+
+
+def test_check_says_nothing_when_nothing_is_configured(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[database]
+path = "versions.sqlite3"
+
+[mailgun]
+enabled = false
+
+[[products]]
+name = "httpx"
+repository = "encode/httpx"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    lines = _check_output(config_path, capsys, monkeypatch)
+
+    assert lines[0] == "Checking 1 product(s) named 'httpx'."
+    assert lines[1].startswith("Detected ")
+
+
+def test_verbose_drops_the_source_lines(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[database]
+path = "versions.sqlite3"
+
+[github]
+token = "ghp_inline"
+
+[mailgun]
+enabled = false
+
+[[products]]
+name = "httpx"
+repository = "encode/httpx"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    lines = _check_output(config_path, capsys, monkeypatch, "--verbose")
+
+    # The DEBUG log already reports every setting and where it came from.
+    assert not [line for line in lines if line.startswith("GitHub token")]
 
 
 def test_render_table_alignment() -> None:

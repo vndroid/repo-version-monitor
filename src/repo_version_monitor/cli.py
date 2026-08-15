@@ -23,6 +23,7 @@ from repo_version_monitor.config import (
 from repo_version_monitor.db import VersionStore
 from repo_version_monitor.http_client import describe as describe_proxy
 from repo_version_monitor.http_client import new_async_client
+from repo_version_monitor.logs import configure_logging, resolve_level
 from repo_version_monitor.monitor import VersionMonitor, product_key
 from repo_version_monitor.providers import DEFAULT_PROVIDER, SUPPORTED_PROVIDERS
 from repo_version_monitor.repo_url import parse_repository_input, url_host
@@ -36,6 +37,39 @@ def _sync_config_hash(config_path: Path) -> list[str]:
     for key in removed:
         print(f"Removed stale data for {key} (no longer in config).")
     return removed
+
+
+def _configured_sources(config) -> list[str]:
+    """One line per credential/proxy that is actually configured.
+
+    Anything unset is left out: an empty line like "GitLab token: not set" is
+    noise for a setup that never wanted one. Use -vv to see every setting.
+    """
+    lines = []
+    if config.github.token_source:
+        lines.append(f"GitHub token: {config.github.token_source}")
+    uses_public_gitlab = any(
+        product.provider == "gitlab" and not product.external_url
+        for product in config.products
+    )
+    if uses_public_gitlab and config.gitlab.token_source:
+        lines.append(f"GitLab token: {config.gitlab.token_source}")
+    # Self-managed instances authenticate with their own product token.
+    for instance in sorted(
+        {
+            product.external_url
+            for product in config.products
+            if product.external_url and product.token
+        }
+    ):
+        lines.append(f"{instance} token: config products.token")
+    if config.mailgun.enabled and config.mailgun.api_key_source:
+        lines.append(f"Mailgun API key: {config.mailgun.api_key_source}")
+    elif config.smtp.enabled and config.smtp.password_source:
+        lines.append(f"SMTP {config.smtp.host}: {config.smtp.password_source}")
+    if config.proxy.enabled:
+        lines.append(f"Proxy: {describe_proxy(config.proxy)}")
+    return lines
 
 
 def _render_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> list[str]:
@@ -55,19 +89,49 @@ def _render_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> list
     return [render_row(headers), *(render_row(row) for row in rows)]
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Monitor GitHub/GitLab tags and notify by email (Mailgun or SMTP)."
+def _global_options() -> argparse.ArgumentParser:
+    """Options accepted before *and* after the subcommand.
+
+    SUPPRESS keeps the subparser from overwriting a value given up front:
+    without it, `-v check` would be reset by the subparser's own default.
+    """
+    options = argparse.ArgumentParser(add_help=False)
+    options.add_argument(
+        "--config", type=Path, default=argparse.SUPPRESS, help="Path to TOML config."
     )
-    parser.add_argument("--config", default="config.toml", type=Path, help="Path to TOML config.")
-    parser.add_argument(
+    options.add_argument(
         "--log-level",
-        default=None,
+        default=argparse.SUPPRESS,
         help="Python logging level. Defaults to WARNING for 'check', INFO otherwise.",
+    )
+    options.add_argument(
+        "-v",
+        action="count",
+        dest="verbose_count",
+        default=argparse.SUPPRESS,
+        help=(
+            "More logs: -v is INFO, -vv is DEBUG (config file keys, environment "
+            "variables, resolved settings), -vvv adds the HTTP internals."
+        ),
+    )
+    options.add_argument(
+        "--verbose",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Same as -vv: DEBUG logs covering config and environment loading.",
+    )
+    return options
+
+
+def main() -> None:
+    common = _global_options()
+    parser = argparse.ArgumentParser(
+        description="Monitor GitHub/GitLab tags and notify by email (Mailgun or SMTP).",
+        parents=[common],
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
-    check_parser = subparsers.add_parser("check", help="Run one check and exit.")
+    check_parser = subparsers.add_parser("check", parents=[common], help="Run one check and exit.")
     check_parser.add_argument(
         "--name",
         help="Only check products with this name; all same-name entries are checked.",
@@ -78,7 +142,7 @@ def main() -> None:
         help="Only check products still shown as '(not checked yet)' in list.",
     )
 
-    add_parser = subparsers.add_parser("add", help="Add a repository to the config.")
+    add_parser = subparsers.add_parser("add", parents=[common], help="Add a repository to the config.")
     add_parser.add_argument(
         "repository",
         help=(
@@ -121,7 +185,7 @@ def main() -> None:
         ),
     )
 
-    delete_parser = subparsers.add_parser("delete", help="Delete a product from the config.")
+    delete_parser = subparsers.add_parser("delete", parents=[common], help="Delete a product from the config.")
     delete_parser.add_argument("--name", help="Select by product name; errors if ambiguous.")
     delete_parser.add_argument("--repository", help="Select precisely by owner/name repository.")
     delete_parser.add_argument(
@@ -138,7 +202,7 @@ def main() -> None:
         help="Narrow selection to this self-managed instance, e.g. https://gitlab.example.com.",
     )
 
-    edit_parser = subparsers.add_parser("edit", help="Edit the branch of an existing product.")
+    edit_parser = subparsers.add_parser("edit", parents=[common], help="Edit the branch of an existing product.")
     edit_parser.add_argument("name", help="Product name as shown by 'list'.")
     edit_parser.add_argument(
         "--branch",
@@ -151,7 +215,7 @@ def main() -> None:
     )
 
     list_parser = subparsers.add_parser(
-        "list", help="List configured repositories and known latest tags."
+        "list", parents=[common], help="List configured repositories and known latest tags."
     )
     sort_group = list_parser.add_mutually_exclusive_group()
     sort_group.add_argument(
@@ -167,15 +231,18 @@ def main() -> None:
 
     subparsers.add_parser(
         "format",
+        parents=[common],
         help="Create config from template if missing; otherwise validate and normalize it.",
     )
 
     subparsers.add_parser(
-        "resend", help="Resend email for updates whose notification was never sent."
+        "resend",
+        parents=[common],
+        help="Resend email for updates whose notification was never sent.",
     )
 
     mailtest_parser = subparsers.add_parser(
-        "mailtest", help="Verify mail settings and send a test email."
+        "mailtest", parents=[common], help="Verify mail settings and send a test email."
     )
     mailtest_parser.add_argument(
         "--ignore",
@@ -183,15 +250,23 @@ def main() -> None:
         help="Ignore the disabled channel and send the test email anyway.",
     )
 
-    run_parser = subparsers.add_parser("run", help="Run checks forever.")
+    run_parser = subparsers.add_parser("run", parents=[common], help="Run checks forever.")
     run_parser.add_argument("--interval", type=int, default=None, help="Seconds between checks.")
 
     args = parser.parse_args()
-    default_level = "WARNING" if args.command == "check" else "INFO"
-    log_level = args.log_level or default_level
-    logging.basicConfig(
-        level=getattr(logging, log_level.upper(), logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    # SUPPRESS leaves the attributes unset when the flag is absent.
+    args.config = getattr(args, "config", None) or Path("config.toml")
+    args.log_level = getattr(args, "log_level", None)
+    verbosity = max(
+        getattr(args, "verbose_count", 0), 2 if getattr(args, "verbose", False) else 0
+    )
+    log_level = resolve_level(args.command, args.log_level, verbosity)
+    configure_logging(log_level, verbosity)
+    logging.getLogger(__name__).debug(
+        "Starting repo-version-monitor %s (config %s, log level %s)",
+        args.command,
+        args.config,
+        log_level,
     )
 
     if args.command == "add":
@@ -344,29 +419,12 @@ def main() -> None:
                 print("All products already have a latest tag; nothing to check.")
                 return
             print(f"Checking {blank_count} unchecked product(s).")
-        print(f"GitHub token: {config.github.token_source or 'not set (unauthenticated)'}")
-        if any(
-            product.provider == "gitlab" and not product.external_url
-            for product in config.products
-        ):
-            print(f"GitLab token: {config.gitlab.token_source or 'not set (unauthenticated)'}")
-        # Self-managed instances authenticate with their own product token.
-        for instance, has_token in sorted(
-            {
-                (product.external_url, bool(product.token))
-                for product in config.products
-                if product.external_url
-            }
-        ):
-            source = "config products.token" if has_token else "not set (unauthenticated)"
-            print(f"{instance} token: {source}")
-        print(f"Proxy: {describe_proxy(config.proxy)}")
-        if config.mailgun.enabled:
-            print(f"Mailgun API key: {config.mailgun.api_key_source or 'not set'}")
-        elif config.smtp.enabled:
-            source = config.smtp.password_source or "not set (no authentication)"
-            print(f"SMTP {config.smtp.host}: {source}")
-        show_progress = args.log_level is None
+        # Only report what is actually configured, and stay out of the way at
+        # -vv: the DEBUG log already spells out every setting and its source.
+        if verbosity < 2:
+            for line in _configured_sources(config):
+                print(line)
+        show_progress = args.log_level is None and verbosity == 0
         dots_printed = 0
 
         async def _check() -> list:

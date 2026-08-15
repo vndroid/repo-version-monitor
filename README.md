@@ -21,7 +21,7 @@ export MAILGUN_API_KEY="key-xxx"           # 走 Mailgun 时需要
 export SMTP_PASSWORD="xxx"                 # 走 SMTP 时需要
 ```
 
-密钥读取优先级（GitHub 令牌、GitLab 令牌与 Mailgun 令牌一致）：先读环境变量（变量名分别由 `token_env`、`token_env`、`api_key_env` 指定，默认 `GITHUB_TOKEN`、`GITLAB_TOKEN`、`MAILGUN_API_KEY`），不存在时回退到配置文件中的 `token` / `api_key` 字段。推荐使用环境变量，内联字段仅作为本地调试的便捷方式，注意不要将含密钥的配置文件提交到版本库。执行 `check` 时会输出密钥的实际来源（环境变量还是配置文件）。
+密钥读取优先级（GitHub 令牌、GitLab 令牌与 Mailgun 令牌一致）：先读环境变量（变量名分别由 `token_env`、`token_env`、`api_key_env` 指定，默认 `GITHUB_TOKEN`、`GITLAB_TOKEN`、`MAILGUN_API_KEY`），不存在时回退到配置文件中的 `token` / `api_key` 字段。推荐使用环境变量，内联字段仅作为本地调试的便捷方式，注意不要将含密钥的配置文件提交到版本库。执行 `check` 时会输出密钥的实际来源（环境变量还是配置文件），没有配置的项不会输出。
 
 ### 邮件通道：Mailgun 或 SMTP
 
@@ -365,6 +365,49 @@ uv run repo-version-monitor --config config.toml run
 支持参数 `--interval` 覆盖配置中的查询间隔。
 
 首次发现新产品时，默认只写入数据库，不发送邮件；这样可以避免初始化时收到一堆“更新”。如果希望首次也通知，把配置中的 `notify_on_first_seen` 改成 `true`。
+
+### 日志与排查
+
+日志格式与 gunicorn 一致，`[时间 时区] [进程号] [级别] 内容`：
+
+```
+[2026-08-11 12:53:45 -0700] [1] [INFO] Detected update for grafana/grafana@13.0: 13.0.1 -> 13.0.2
+```
+
+`-v` 可叠加，也可以写在子命令前后任意位置：
+
+| 参数 | 级别 | 输出内容 |
+| --- | --- | --- |
+| 默认 | `check` 为 WARNING，其余 INFO | 只报结果与异常 |
+| `-v` | INFO | 每个产品的检查结果、HTTP 请求行 |
+| `-vv` / `--verbose` | DEBUG | 读了哪个配置文件、每段有哪些键、每个 `[[products]]` 的解析结果、查了哪些环境变量、各配置项最终生效值与来源 |
+| `-vvv` | DEBUG | 再放开 httpcore 等底层库（每次 socket 读写都会打印，排查代理/TLS 时才需要） |
+
+`--log-level` 优先级最高，与 `-v` 同时出现时以它为准。
+
+`check` 开头那几行密钥/代理来源提示遵循两条规则：**没配置的项不出现**（不再打印 `GitLab token: not set` 这类空信息），**加了 `-vv` 也不出现**（DEBUG 日志已经把每一项都写清楚了，避免重复）。所以默认情况下只会看到实际生效的东西：
+
+```
+Checking 1 product(s) named 'httpx'.
+GitHub token: config github.token
+SMTP smtp.example.com: env SMTP_PASSWORD
+Proxy: socks5://127.0.0.1:1080
+Detected 0 update(s) in 0.4s.
+```
+
+排查配置问题时 `--verbose` 最有用，典型输出：
+
+```
+[2026-08-11 12:53:45 -0700] [1] [DEBUG] Reading config config.toml
+[2026-08-11 12:53:45 -0700] [1] [DEBUG] config [smtp]: enabled, host, port, encryption, username, password, from_email, to_emails
+[2026-08-11 12:53:45 -0700] [1] [DEBUG] env SMTP_PASSWORD: set
+[2026-08-11 12:53:45 -0700] [1] [DEBUG] env GITHUB_TOKEN: not set
+[2026-08-11 12:53:45 -0700] [1] [DEBUG] config [[products]]: name=gitlab provider=gitlab repository=gitlab-org/gitlab branch=(none) external_url=(public instance) suffix=-ee token=not set
+[2026-08-11 12:53:45 -0700] [1] [DEBUG] config github.token: from config github.token
+[2026-08-11 12:53:45 -0700] [1] [DEBUG] config smtp: smtp.example.com:587 encryption=starttls username=monitor@example.com password=from env SMTP_PASSWORD from=... to=...
+```
+
+日志只打印密钥的**来源**（`from env SMTP_PASSWORD` / `from config github.token` / `not set`），任何级别都不会打印密钥本身，因此贴日志求助前无需手动脱敏。
 
 ## 测试
 

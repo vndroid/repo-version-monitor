@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import tomllib
 
+from repo_version_monitor.logs import read_env
 from repo_version_monitor.providers import (
     DEFAULT_PROVIDER,
     SUFFIX_SEPARATOR,
@@ -470,6 +471,7 @@ def _strip_product_blocks(text: str) -> str:
 def load_products(path: Path) -> list[ProductConfig]:
     with path.open("rb") as file:
         raw = tomllib.load(file)
+    logger.debug("config %s: %d [[products]] entries", path, len(raw.get("products", [])))
 
     products = []
     for item in raw.get("products", []):
@@ -486,6 +488,17 @@ def load_products(path: Path) -> list[ProductConfig]:
             suffix=item.get("suffix") or None,
         )
         validate_product(product)
+        logger.debug(
+            "config [[products]]: name=%s provider=%s repository=%s branch=%s "
+            "external_url=%s suffix=%s token=%s",
+            product.name,
+            product.provider,
+            product.repository,
+            product.branch or "(none)",
+            product.external_url or "(public instance)",
+            product.suffix or "(plain versions)",
+            "set" if product.token else "not set",
+        )
         products.append(product)
     return products
 
@@ -498,6 +511,7 @@ def resolve_database_path(config_path: Path) -> Path:
     db_path = Path(raw.get("database", {}).get("path") or DEFAULT_DATABASE_PATH)
     if not db_path.is_absolute():
         db_path = config_path.parent / db_path
+    logger.debug("config database.path: %s", db_path)
     return db_path
 
 
@@ -548,7 +562,7 @@ def load_smtp_config(raw: dict) -> SmtpConfig:
     smtp_raw = raw.get("smtp", {})
     password_env = smtp_raw.get("password_env", "SMTP_PASSWORD")
     # Priority: environment variable first, then the inline smtp.password value.
-    env_password = os.getenv(password_env)
+    env_password = read_env(password_env)
     password = env_password or smtp_raw.get("password") or ""
     smtp = SmtpConfig(
         enabled=bool(smtp_raw.get("enabled", False)),
@@ -639,6 +653,12 @@ def load_config(path: Path) -> AppConfig:
     with path.open("rb") as file:
         raw = tomllib.load(file)
 
+    logger.debug("Reading config %s", path)
+    for section, values in raw.items():
+        if isinstance(values, dict):
+            # Key names only: values may be tokens.
+            logger.debug("config [%s]: %s", section, ", ".join(values) or "(empty)")
+
     reject_outdated_settings(raw)
 
     github_raw = raw.get("github", {})
@@ -658,7 +678,7 @@ def load_config(path: Path) -> AppConfig:
         )
     api_key_env = mailgun_raw.get("api_key_env", "MAILGUN_API_KEY")
     # Priority: environment variable first, then the inline mailgun.api_key value.
-    env_api_key = os.getenv(api_key_env)
+    env_api_key = read_env(api_key_env)
     api_key = env_api_key or mailgun_raw.get("api_key") or None
     api_key_source = f"env {api_key_env}" if env_api_key else ("config mailgun.api_key" if api_key else None)
     if mailgun_enabled and not api_key:
@@ -666,12 +686,10 @@ def load_config(path: Path) -> AppConfig:
 
     token_env = github_raw.get("token_env", "GITHUB_TOKEN")
     # Priority: environment variable first, then the inline github.token value.
-    env_token = os.getenv(token_env)
+    env_token = read_env(token_env)
     # Trailing `or None`: an empty value means "unset", not an empty token.
     token = env_token or github_raw.get("token") or None
     token_source = f"env {token_env}" if env_token else ("config github.token" if token else None)
-    if token_source:
-        logger.debug("GitHub token loaded from %s.", token_source)
     if not token:
         logger.warning(
             "No GitHub token found (github.token unset and env %s is empty); "
@@ -690,7 +708,7 @@ def load_config(path: Path) -> AppConfig:
 
     gitlab_token_env = gitlab_raw.get("token_env", "GITLAB_TOKEN")
     # Priority: environment variable first, then the inline gitlab.token value.
-    env_gitlab_token = os.getenv(gitlab_token_env)
+    env_gitlab_token = read_env(gitlab_token_env)
     gitlab_token = env_gitlab_token or gitlab_raw.get("token") or None
     gitlab_token_source = (
         f"env {gitlab_token_env}"
@@ -704,7 +722,7 @@ def load_config(path: Path) -> AppConfig:
             gitlab_token_env,
         )
 
-    return AppConfig(
+    config = AppConfig(
         database=DatabaseConfig(path=db_path),
         github=GitHubConfig(
             token=token,
@@ -734,6 +752,54 @@ def load_config(path: Path) -> AppConfig:
         source_path=path,
         proxy=load_proxy_config(raw),
         smtp=smtp,
+    )
+    _log_resolved_settings(config)
+    return config
+
+
+def _source(source: str | None) -> str:
+    return f"from {source}" if source else "not set"
+
+
+def _log_resolved_settings(config: AppConfig) -> None:
+    """Report what the config actually resolved to; never logs a secret value."""
+    if not logger.isEnabledFor(logging.DEBUG):
+        return
+    logger.debug("config github.token: %s", _source(config.github.token_source))
+    logger.debug("config github.per_page: %d", config.github.per_page)
+    logger.debug("config gitlab.token: %s", _source(config.gitlab.token_source))
+    logger.debug(
+        "config monitor: interval_seconds=%d notify_on_first_seen=%s",
+        config.monitor.interval_seconds,
+        config.monitor.notify_on_first_seen,
+    )
+    if config.mailgun.enabled:
+        logger.debug(
+            "config mailgun: domain=%s api_url=%s from=%s to=%s api_key=%s",
+            config.mailgun.domain,
+            config.mailgun.api_url,
+            config.mailgun.from_email,
+            ", ".join(config.mailgun.to_emails),
+            _source(config.mailgun.api_key_source),
+        )
+    if config.smtp.enabled:
+        logger.debug(
+            "config smtp: %s:%d encryption=%s username=%s password=%s from=%s to=%s",
+            config.smtp.host,
+            config.smtp.port,
+            config.smtp.encryption,
+            config.smtp.username or "(no authentication)",
+            _source(config.smtp.password_source),
+            config.smtp.from_email,
+            ", ".join(config.smtp.to_emails),
+        )
+    if not config.notifications_enabled:
+        logger.debug("config: mail delivery is disabled, updates are only recorded")
+    logger.debug(
+        "config proxy: %s",
+        f"{config.proxy.url} ({'authenticated' if config.proxy.username else 'anonymous'})"
+        if config.proxy.enabled
+        else "not set",
     )
 
 
