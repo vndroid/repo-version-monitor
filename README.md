@@ -1,8 +1,8 @@
 # Repo Version Monitor
 
-定时检查 GitHub / GitLab 仓库 tags，与本地 SQLite 中保存的版本对比；发现新 tag 后，通过 Mailgun API 使用 `httpx` 发送邮件通知。
+定时检查 GitHub / GitLab 仓库 tags，与本地 SQLite 中保存的版本对比；发现新 tag 后发送邮件通知。
 
-邮件发送使用 Mailgun API，具体可参考[官方手册](https://documentation.mailgun.com/docs/mailgun/user-manual/sending-messages/send-http)。
+邮件发送支持两种通道：Mailgun API（参考[官方手册](https://documentation.mailgun.com/docs/mailgun/user-manual/sending-messages/send-http)）与普通 SMTP，二选一。
 
 ## 配置
 
@@ -17,14 +17,50 @@ cp config.example.toml config.toml
 ```bash
 export GITHUB_TOKEN="github_pat_xxx"       # 可选，但建议设置，避免 GitHub 匿名限额
 export GITLAB_TOKEN="glpat-xxx"            # 可选，仅追踪私有 GitLab 项目时需要
-export MAILGUN_API_KEY="key-xxx"
+export MAILGUN_API_KEY="key-xxx"           # 走 Mailgun 时需要
+export SMTP_PASSWORD="xxx"                 # 走 SMTP 时需要
 ```
 
 密钥读取优先级（GitHub 令牌、GitLab 令牌与 Mailgun 令牌一致）：先读环境变量（变量名分别由 `token_env`、`token_env`、`api_key_env` 指定，默认 `GITHUB_TOKEN`、`GITLAB_TOKEN`、`MAILGUN_API_KEY`），不存在时回退到配置文件中的 `token` / `api_key` 字段。推荐使用环境变量，内联字段仅作为本地调试的便捷方式，注意不要将含密钥的配置文件提交到版本库。执行 `check` 时会输出密钥的实际来源（环境变量还是配置文件）。
 
+### 邮件通道：Mailgun 或 SMTP
+
+`[mailgun]` 与 `[smtp]` 各有一个 `enabled`，**只能开一个**——两个都开会在启动时报错，否则每次更新会收到两封重复邮件；两个都关则只记录数据库、不发信。
+
+SMTP 配置：
+
+```toml
+[smtp]
+enabled = false
+host = ""
+port = 587
+# "starttls"（通常 587）/ "ssl"（通常 465）/ "none"（仅内网中继）
+encryption = "starttls"
+username = ""
+password = ""
+from_email = ""
+to_emails = []
+```
+
+- `encryption` 三选一：`starttls` 明文连接后升级加密，`ssl` 从第一个字节就是 TLS（SMTPS），`none` 完全不加密，只适合内网中继；
+- `username` 留空表示免认证中继，不会尝试登录；填了 `password` 却没填 `username` 会报错；
+- 密码读取优先级与其他密钥一致：先读环境变量 `SMTP_PASSWORD`（变量名可用 `password_env` 改），再回退到配置里的 `password`。`check` 与 `mailtest` 会打印实际来源；
+- `host` 只写主机名，带 `://` 或路径会报错；
+- 用 QQ / 163 这类邮箱时注意填的是**授权码**而不是登录密码，且它们通常用 465 + `ssl`。
+
+发信实现用标准库 `smtplib`，在线程里执行，不引入额外依赖。**注意 `[proxy]` 只作用于 HTTP 请求（GitHub / GitLab / Mailgun），SMTP 不走代理。**
+
+`mailtest` 会自动测试当前启用的那个通道：
+
+```bash
+uv run repo-version-monitor --config config.toml mailtest
+```
+
+两个通道都关闭时加 `--ignore` 仍可测试——此时若 `[smtp] host` 有值就测 SMTP，否则测 Mailgun。
+
 ### 代理
 
-所有外发请求（GitHub、GitLab、Mailgun）都可以走代理，支持 http 与 socks5：
+所有外发 HTTP 请求（GitHub、GitLab、Mailgun）都可以走代理，支持 http 与 socks5（SMTP 不经过代理）：
 
 ```toml
 [proxy]
@@ -167,7 +203,7 @@ uv run repo-version-monitor --config config.toml format
 存在则做三件事：
 
 1. 校验格式是否合法；
-2. **补全缺失的配置项**：`[database]`、`[github]`、`[gitlab]`、`[mailgun]`、`[monitor]`、`[proxy]` 各段中缺失的键会补上默认值，整段缺失时补上整段。已有的值、键顺序和注释都原样保留，只在所属段末尾追加缺失项，命令执行后会列出补了哪些项；
+2. **补全缺失的配置项**：`[database]`、`[github]`、`[gitlab]`、`[mailgun]`、`[smtp]`、`[monitor]`、`[proxy]` 各段中缺失的键会补上默认值，整段缺失时补上整段。已有的值、键顺序和注释都原样保留，只在所属段末尾追加缺失项，命令执行后会列出补了哪些项；
 3. 规范化所有 `[[products]]` 块，产品之间留空行，为未配置 `provider`、`external_url`、`token`、`branch`、`suffix` 的产品补空值。
 
 补全时字符串类配置一律写成空值 `""`，含义是"用内置默认值"，因此不必手填也不会覆盖你已经写好的值：
@@ -182,6 +218,9 @@ uv run repo-version-monitor --config config.toml format
 | `products.token` | 匿名访问该实例 |
 | `products.suffix` | 只认纯版本号 `v1.2.3` |
 | `mailgun.api_url` | `https://api.mailgun.net/v3` |
+| `smtp.port` | `587` |
+| `smtp.encryption` | `starttls` |
+| `smtp.username` / `smtp.password` | 免认证，密码回退到 `SMTP_PASSWORD` |
 | `proxy.type` | `http` |
 | `proxy.port` | `8080` |
 
@@ -383,7 +422,7 @@ docker run -d --restart unless-stopped \
 
 ### 关闭邮件通知
 
-把配置中的 `[mailgun]` 段的 `enabled` 改成 `false` 即可关闭邮件通知（默认为 `true`）。
+把 `[mailgun]` 与 `[smtp]` 两段的 `enabled` 都改成 `false` 即可关闭邮件通知。
 
 关闭后：
 

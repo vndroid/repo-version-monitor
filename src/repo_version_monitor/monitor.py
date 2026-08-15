@@ -13,7 +13,9 @@ from repo_version_monitor.config import (
 )
 from repo_version_monitor.db import VersionStore
 from repo_version_monitor.http_client import new_async_client
-from repo_version_monitor.mailgun import MailgunClient, VersionUpdate
+from repo_version_monitor.mailgun import MailgunClient
+from repo_version_monitor.message import VersionUpdate
+from repo_version_monitor.smtp import SmtpClient
 from repo_version_monitor.providers import (
     GitHubClient,
     GitLabClient,
@@ -65,6 +67,19 @@ class VersionMonitor:
             from_email=config.mailgun.from_email,
             to_emails=config.mailgun.to_emails,
             api_url=config.mailgun.api_url,
+        )
+        self.smtp = SmtpClient(
+            host=config.smtp.host,
+            port=config.smtp.port,
+            encryption=config.smtp.encryption,
+            username=config.smtp.username,
+            password=config.smtp.password,
+            from_email=config.smtp.from_email,
+            to_emails=config.smtp.to_emails,
+        )
+        # Exactly one channel can be enabled; None means notifications are off.
+        self.notifier: MailgunClient | SmtpClient | None = (
+            self.smtp if config.smtp.enabled else self.mailgun if config.mailgun.enabled else None
         )
 
     async def check_once(
@@ -169,9 +184,9 @@ class VersionMonitor:
                     logger.info("%s is unchanged at %s", label, latest_tag)
 
             if updates:
-                if self.config.mailgun.enabled:
+                if self.notifier is not None:
                     # Events with notified_at IS NULL indicate a failed/missed email.
-                    await self.mailgun.send_updates(client, updates)
+                    await self.notifier.send_updates(client, updates)
                     for event_id in event_ids:
                         self.store.mark_notified(event_id)
                 else:
@@ -218,9 +233,11 @@ class VersionMonitor:
             VersionUpdate(event.product_name, event.repository, event.old_tag, event.new_tag)
             for event in events
         ]
+        if self.notifier is None:
+            return []
         # Always one all-in-one email covering the whole backlog.
         async with new_async_client(self.config.proxy) as client:
-            await self.mailgun.send_updates(client, updates, subject_prefix="accumulation:")
+            await self.notifier.send_updates(client, updates, subject_prefix="accumulation:")
         for event in events:
             self.store.mark_notified(event.event_id)
         logger.info("Resent notification for %d event(s).", len(events))

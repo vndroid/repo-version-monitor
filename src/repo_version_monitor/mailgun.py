@@ -1,19 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import httpx
 
+from repo_version_monitor.message import (
+    TEST_BODY,
+    TEST_SUBJECT,
+    VersionUpdate,
+    body_for,
+    subject_for,
+)
 
-@dataclass(frozen=True)
-class VersionUpdate:
-    product_name: str
-    repository: str
-    old_tag: str | None
-    new_tag: str
+__all__ = ["MailgunClient", "VersionUpdate"]
 
 
 class MailgunClient:
+    """Delivery through the Mailgun HTTP API."""
+
     def __init__(
         self,
         domain: str,
@@ -39,9 +41,19 @@ class MailgunClient:
         if not updates:
             return
 
-        subject = f"{subject_prefix}{_subject(updates)}"
-        text = _body(updates)
-        response = await client.post(
+        response = await self._post(
+            client, f"{subject_prefix}{subject_for(updates)}", body_for(updates)
+        )
+        response.raise_for_status()
+
+    async def send_test(self, client: httpx.AsyncClient) -> httpx.Response:
+        """Send a test email; returns the raw response so callers can report the result."""
+        return await self._post(client, TEST_SUBJECT, TEST_BODY)
+
+    async def _post(
+        self, client: httpx.AsyncClient, subject: str, text: str
+    ) -> httpx.Response:
+        return await client.post(
             f"{self.api_url}/{self.domain}/messages",
             auth=("api", self.api_key),
             data={
@@ -51,53 +63,3 @@ class MailgunClient:
                 "text": text,
             },
         )
-        response.raise_for_status()
-
-    async def send_test(self, client: httpx.AsyncClient) -> httpx.Response:
-        """Send a test email; returns the raw response so callers can report the result."""
-        return await client.post(
-            f"{self.api_url}/{self.domain}/messages",
-            auth=("api", self.api_key),
-            data={
-                "from": self.from_email,
-                "to": self.to_emails,
-                "subject": "repo-version-monitor test email",
-                "text": (
-                    "This is a test email from repo-version-monitor.\n"
-                    "If you received it, your Mailgun configuration works."
-                ),
-            },
-        )
-
-
-def _clean(value: str) -> str:
-    """Strip control characters (CR/LF etc.) from remote-supplied strings.
-
-    Tag names come from repositories we do not control; without this a tag
-    like "v1.0\\r\\nBcc: x@evil.com" could inject email headers.
-    """
-    return "".join(c for c in value if c.isprintable())
-
-
-def _subject(updates: list[VersionUpdate]) -> str:
-    if len(updates) == 1:
-        update = updates[0]
-        return f"{_clean(update.product_name)} has a new tag: {_clean(update.new_tag)}"
-    return f"{len(updates)} repositories have new tags"
-
-
-def _body(updates: list[VersionUpdate]) -> str:
-    lines = ["Detected GitHub tag updates:", ""]
-    for update in updates:
-        previous = _clean(update.old_tag) if update.old_tag else "(first seen)"
-        lines.extend(
-            [
-                f"- {_clean(update.product_name)}",
-                f"  Repository: https://github.com/{update.repository}",
-                f"  Previous: {previous}",
-                f"  Current:  {_clean(update.new_tag)}",
-                "",
-            ]
-        )
-    return "\n".join(lines).rstrip()
-

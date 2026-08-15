@@ -76,6 +76,22 @@ class MailgunConfig:
 
 
 @dataclass(frozen=True)
+class SmtpConfig:
+    """Delivery through a plain SMTP server, as an alternative to Mailgun."""
+
+    enabled: bool = False
+    host: str = ""
+    port: int = 587
+    #: "starttls" (587), "ssl" (465) or "none" (25).
+    encryption: str = "starttls"
+    username: str = ""
+    password: str = field(default="", repr=False)
+    from_email: str = ""
+    to_emails: list[str] = field(default_factory=list)
+    password_source: str | None = None
+
+
+@dataclass(frozen=True)
 class ProxyConfig:
     """Outgoing proxy for every API request (GitHub, GitLab, Mailgun)."""
 
@@ -113,6 +129,11 @@ class AppConfig:
     products: list[ProductConfig]
     source_path: Path
     proxy: ProxyConfig = field(default_factory=ProxyConfig)
+    smtp: SmtpConfig = field(default_factory=SmtpConfig)
+
+    @property
+    def notifications_enabled(self) -> bool:
+        return self.mailgun.enabled or self.smtp.enabled
 
 
 def config_file_hash(path: Path) -> str:
@@ -166,6 +187,19 @@ _DEFAULT_SETTINGS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("api_url", '""'),
         ),
     ),
+    (
+        "smtp",
+        (
+            ("enabled", "false"),
+            ("host", '""'),
+            ("port", "587"),
+            ("encryption", '"starttls"'),
+            ("username", '""'),
+            ("password", '""'),
+            ("from_email", '""'),
+            ("to_emails", "[]"),
+        ),
+    ),
     ("monitor", (("interval_seconds", "3600"), ("notify_on_first_seen", "false"))),
     (
         "proxy",
@@ -181,6 +215,8 @@ _DEFAULT_SETTINGS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
 )
 
 SUPPORTED_PROXY_TYPES = ("http", "socks5")
+SUPPORTED_SMTP_ENCRYPTIONS = ("starttls", "ssl", "none")
+DEFAULT_SMTP_PORT = 587
 
 DEFAULT_DATABASE_PATH = "versions.sqlite3"
 DEFAULT_GITLAB_EXTERNAL_URL = "https://gitlab.com"
@@ -507,6 +543,62 @@ def reject_outdated_settings(raw: dict) -> None:
             raise ValueError(f"[{section}] {key} " + hint.format(value=value))
 
 
+def load_smtp_config(raw: dict) -> SmtpConfig:
+    """Read the [smtp] section; an empty/missing section means no SMTP."""
+    smtp_raw = raw.get("smtp", {})
+    password_env = smtp_raw.get("password_env", "SMTP_PASSWORD")
+    # Priority: environment variable first, then the inline smtp.password value.
+    env_password = os.getenv(password_env)
+    password = env_password or smtp_raw.get("password") or ""
+    smtp = SmtpConfig(
+        enabled=bool(smtp_raw.get("enabled", False)),
+        host=(smtp_raw.get("host") or "").strip(),
+        # Empty values mean "the default", as everywhere else in the config.
+        port=int(smtp_raw.get("port") or DEFAULT_SMTP_PORT),
+        encryption=(smtp_raw.get("encryption") or "starttls").lower(),
+        username=smtp_raw.get("username") or "",
+        password=password,
+        from_email=smtp_raw.get("from_email") or "",
+        to_emails=list(smtp_raw.get("to_emails") or []),
+        password_source=(
+            f"env {password_env}"
+            if env_password
+            else ("config smtp.password" if password else None)
+        ),
+    )
+    validate_smtp(smtp)
+    return smtp
+
+
+def validate_smtp(smtp: SmtpConfig) -> None:
+    if not smtp.enabled:
+        return
+    if smtp.encryption not in SUPPORTED_SMTP_ENCRYPTIONS:
+        supported = ", ".join(SUPPORTED_SMTP_ENCRYPTIONS)
+        raise ValueError(
+            f"Invalid smtp.encryption {smtp.encryption!r}: expected one of {supported}."
+        )
+    if "://" in smtp.host or "/" in smtp.host:
+        raise ValueError(
+            f"Invalid smtp.host {smtp.host!r}: use the host only, e.g. smtp.example.com."
+        )
+    if not 1 <= smtp.port <= 65535:
+        raise ValueError(f"Invalid smtp.port {smtp.port}: expected 1-65535.")
+    missing = [
+        f"smtp.{field_name}"
+        for field_name, value in (
+            ("host", smtp.host),
+            ("from_email", smtp.from_email),
+            ("to_emails", smtp.to_emails),
+        )
+        if not value
+    ]
+    if missing:
+        raise ValueError(f"{', '.join(missing)} is required when smtp.enabled is true.")
+    if smtp.password and not smtp.username:
+        raise ValueError("smtp.password is set but smtp.username is empty.")
+
+
 def load_proxy_config(raw: dict) -> ProxyConfig:
     """Read the [proxy] section; an empty/missing section means no proxy."""
     proxy_raw = raw.get("proxy", {})
@@ -557,7 +649,13 @@ def load_config(path: Path) -> AppConfig:
 
     db_path = resolve_database_path(path)
 
+    smtp = load_smtp_config(raw)
     mailgun_enabled = bool(mailgun_raw.get("enabled", True))
+    if mailgun_enabled and smtp.enabled:
+        raise ValueError(
+            "mailgun.enabled and smtp.enabled are both true; pick one delivery "
+            "channel, otherwise every update would be mailed twice."
+        )
     api_key_env = mailgun_raw.get("api_key_env", "MAILGUN_API_KEY")
     # Priority: environment variable first, then the inline mailgun.api_key value.
     env_api_key = os.getenv(api_key_env)
@@ -635,6 +733,7 @@ def load_config(path: Path) -> AppConfig:
         products=products,
         source_path=path,
         proxy=load_proxy_config(raw),
+        smtp=smtp,
     )
 
 

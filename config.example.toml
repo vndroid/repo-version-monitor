@@ -25,13 +25,28 @@ to_emails = ["you@example.com"]
 # Mailgun API endpoint. For EU accounts, use "https://api.eu.mailgun.net/v3".
 api_url = "https://api.mailgun.net/v3"
 
+[smtp]
+# Delivery through a plain SMTP server, as an alternative to Mailgun: enable
+# either one, not both. password should normally come from SMTP_PASSWORD.
+enabled = false
+host = ""
+port = 587
+# "starttls" (usually 587), "ssl" (usually 465) or "none" (internal relay only).
+encryption = "starttls"
+# Leave username empty for a relay that needs no authentication.
+username = ""
+password = ""
+from_email = ""
+to_emails = []
+
 [monitor]
 interval_seconds = 3600
 notify_on_first_seen = false
 
 [proxy]
-# Proxy for every outgoing request (GitHub, GitLab, Mailgun). When disabled,
-# the HTTP_PROXY/HTTPS_PROXY environment variables still apply as usual.
+# Proxy for every outgoing HTTP request (GitHub, GitLab, Mailgun); SMTP does
+# not go through it. When disabled, the HTTP_PROXY/HTTPS_PROXY environment
+# variables still apply as usual.
 enabled = false
 # "http" or "socks5".
 type = "http"

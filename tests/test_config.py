@@ -697,6 +697,142 @@ branch = ""
     assert config.products[0].branch is None
 
 
+def _smtp_config(tmp_path: Path, section: str, mailgun: str = "enabled = false") -> Path:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f"""
+[mailgun]
+{mailgun}
+
+{section}
+
+[[products]]
+name = "httpx"
+repository = "encode/httpx"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    return config_path
+
+
+def test_smtp_defaults_to_disabled(tmp_path: Path) -> None:
+    config = load_config(_smtp_config(tmp_path, ""))
+
+    assert config.smtp.enabled is False
+    assert config.notifications_enabled is False
+
+
+def test_load_smtp_section(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("SMTP_PASSWORD", raising=False)
+    config_path = _smtp_config(
+        tmp_path,
+        """
+[smtp]
+enabled = true
+host = "smtp.example.com"
+port = 465
+encryption = "ssl"
+username = "monitor@example.com"
+password = "inline-secret"
+from_email = "monitor@example.com"
+to_emails = ["you@example.com"]
+""".strip(),
+    )
+
+    smtp = load_config(config_path).smtp
+
+    assert (smtp.enabled, smtp.host, smtp.port, smtp.encryption) == (
+        True,
+        "smtp.example.com",
+        465,
+        "ssl",
+    )
+    assert smtp.to_emails == ["you@example.com"]
+    assert smtp.password_source == "config smtp.password"
+    # The password is not exposed by repr, so it stays out of logs.
+    assert "inline-secret" not in repr(smtp)
+    assert load_config(config_path).notifications_enabled is True
+
+
+def test_smtp_password_prefers_the_environment(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SMTP_PASSWORD", "env-secret")
+    config_path = _smtp_config(
+        tmp_path,
+        """
+[smtp]
+enabled = true
+host = "smtp.example.com"
+username = "monitor@example.com"
+password = "inline-secret"
+from_email = "monitor@example.com"
+to_emails = ["you@example.com"]
+""".strip(),
+    )
+
+    smtp = load_config(config_path).smtp
+
+    assert smtp.password == "env-secret"
+    assert smtp.password_source == "env SMTP_PASSWORD"
+
+
+def test_mailgun_and_smtp_are_mutually_exclusive(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("MAILGUN_API_KEY", "key-xxx")
+    config_path = _smtp_config(
+        tmp_path,
+        """
+[smtp]
+enabled = true
+host = "smtp.example.com"
+from_email = "monitor@example.com"
+to_emails = ["you@example.com"]
+""".strip(),
+        mailgun='enabled = true\ndomain = "mg.example.com"\nfrom_email = "a@b.com"\nto_emails = ["c@d.com"]',
+    )
+
+    with pytest.raises(ValueError, match="both true"):
+        load_config(config_path)
+
+
+@pytest.mark.parametrize(
+    ("section", "message"),
+    [
+        ("[smtp]\nenabled = true", "smtp.host"),
+        (
+            '[smtp]\nenabled = true\nhost = "smtp.example.com"\nfrom_email = "a@b.com"',
+            "smtp.to_emails is required",
+        ),
+        (
+            '[smtp]\nenabled = true\nhost = "smtp.example.com"\nencryption = "tls"',
+            "Invalid smtp.encryption",
+        ),
+        (
+            '[smtp]\nenabled = true\nhost = "smtps://smtp.example.com"',
+            "Invalid smtp.host",
+        ),
+        (
+            # 0 means "use the default", like everywhere else; 70000 is just wrong.
+            '[smtp]\nenabled = true\nhost = "smtp.example.com"\nport = 70000',
+            "Invalid smtp.port",
+        ),
+        (
+            '[smtp]\nenabled = true\nhost = "smtp.example.com"\nfrom_email = "a@b.com"'
+            '\nto_emails = ["c@d.com"]\npassword = "x"',
+            "smtp.username is empty",
+        ),
+    ],
+)
+def test_invalid_smtp_settings(tmp_path: Path, monkeypatch, section: str, message: str) -> None:
+    monkeypatch.delenv("SMTP_PASSWORD", raising=False)
+    with pytest.raises(ValueError, match=message):
+        load_config(_smtp_config(tmp_path, section))
+
+
+def test_invalid_smtp_settings_ignored_while_disabled(tmp_path: Path) -> None:
+    config = load_config(_smtp_config(tmp_path, '[smtp]\nenabled = false\nencryption = "tls"'))
+
+    assert config.smtp.enabled is False
+
+
 def _proxy_config(tmp_path: Path, section: str) -> Path:
     config_path = tmp_path / "config.toml"
     config_path.write_text(

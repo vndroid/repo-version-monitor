@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import logging
 from pathlib import Path
+import smtplib
 import time
 
 import httpx
@@ -56,7 +57,7 @@ def _render_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> list
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Monitor GitHub/GitLab tags and notify via Mailgun."
+        description="Monitor GitHub/GitLab tags and notify by email (Mailgun or SMTP)."
     )
     parser.add_argument("--config", default="config.toml", type=Path, help="Path to TOML config.")
     parser.add_argument(
@@ -174,12 +175,12 @@ def main() -> None:
     )
 
     mailtest_parser = subparsers.add_parser(
-        "mailtest", help="Verify mail settings and send a test email via Mailgun."
+        "mailtest", help="Verify mail settings and send a test email."
     )
     mailtest_parser.add_argument(
         "--ignore",
         action="store_true",
-        help="Ignore mailgun.enabled = false and send the test email anyway.",
+        help="Ignore the disabled channel and send the test email anyway.",
     )
 
     run_parser = subparsers.add_parser("run", help="Run checks forever.")
@@ -362,6 +363,9 @@ def main() -> None:
         print(f"Proxy: {describe_proxy(config.proxy)}")
         if config.mailgun.enabled:
             print(f"Mailgun API key: {config.mailgun.api_key_source or 'not set'}")
+        elif config.smtp.enabled:
+            source = config.smtp.password_source or "not set (no authentication)"
+            print(f"SMTP {config.smtp.host}: {source}")
         show_progress = args.log_level is None
         dots_printed = 0
 
@@ -394,48 +398,70 @@ def main() -> None:
         return
 
     if args.command == "mailtest":
-        mg = config.mailgun
-        if not mg.enabled:
+        # With both channels off, --ignore tests whichever one looks configured.
+        use_smtp = config.smtp.enabled or (
+            not config.mailgun.enabled and bool(config.smtp.host)
+        )
+        channel = "smtp" if use_smtp else "mailgun"
+        if not config.notifications_enabled:
             if not args.ignore:
                 print(
-                    "Email notifications are disabled (mailgun.enabled = false); "
-                    "enable them first or pass --ignore."
+                    "Email notifications are disabled (mailgun.enabled and smtp.enabled "
+                    "are both false); enable one first or pass --ignore."
                 )
                 return
-            print("mailgun.enabled = false ignored (--ignore); proceeding with the test.")
-        print("Mailgun configuration:")
-        print(f"  domain:   {mg.domain}")
-        print(f"  from:     {mg.from_email}")
-        print(f"  to:       {', '.join(mg.to_emails) or '(empty)'}")
-        print(f"  api_url:  {mg.api_url}")
-        print(f"  proxy:    {describe_proxy(config.proxy)}")
-        print(f"  api_key:  {mg.api_key_source or 'not set'}")
+            print(f"Notifications disabled, ignored (--ignore); testing {channel}.")
 
-        problems = [
-            f"{field} is empty"
-            for field, value in (
-                ("mailgun.domain", mg.domain),
-                ("mailgun.from_email", mg.from_email),
-                ("mailgun.to_emails", mg.to_emails),
-                ("mailgun.api_key", mg.api_key),
+        if use_smtp:
+            settings = config.smtp
+            print("SMTP configuration:")
+            print(f"  host:       {settings.host}:{settings.port}")
+            print(f"  encryption: {settings.encryption}")
+            print(f"  from:       {settings.from_email}")
+            print(f"  to:         {', '.join(settings.to_emails) or '(empty)'}")
+            print(f"  username:   {settings.username or '(no authentication)'}")
+            print(f"  password:   {settings.password_source or 'not set'}")
+            required = (
+                ("smtp.host", settings.host),
+                ("smtp.from_email", settings.from_email),
+                ("smtp.to_emails", settings.to_emails),
             )
-            if not value
-        ]
+        else:
+            settings = config.mailgun
+            print("Mailgun configuration:")
+            print(f"  domain:   {settings.domain}")
+            print(f"  from:     {settings.from_email}")
+            print(f"  to:       {', '.join(settings.to_emails) or '(empty)'}")
+            print(f"  api_url:  {settings.api_url}")
+            print(f"  proxy:    {describe_proxy(config.proxy)}")
+            print(f"  api_key:  {settings.api_key_source or 'not set'}")
+            required = (
+                ("mailgun.domain", settings.domain),
+                ("mailgun.from_email", settings.from_email),
+                ("mailgun.to_emails", settings.to_emails),
+                ("mailgun.api_key", settings.api_key),
+            )
+
+        problems = [f"{field} is empty" for field, value in required if not value]
         if problems:
             for problem in problems:
                 print(f"Config problem: {problem}")
             return
 
-        async def _send_test() -> httpx.Response:
+        async def _send_test():
             async with new_async_client(config.proxy) as client:
-                return await monitor.mailgun.send_test(client)
+                sender = monitor.smtp if use_smtp else monitor.mailgun
+                return await sender.send_test(client)
 
         print("Sending test email...")
         start = time.monotonic()
         try:
             response = asyncio.run(_send_test())
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, OSError, smtplib.SMTPException) as exc:
             print(f"Send failed ({time.monotonic() - start:.1f}s): {exc}")
+            return
+        if response is None:  # SMTP raises on failure, so getting here means sent
+            print(f"Success in {time.monotonic() - start:.1f}s.")
             return
         status = "Success" if response.is_success else "Failed"
         print(f"{status} (HTTP {response.status_code}) in {time.monotonic() - start:.1f}s.")
@@ -443,8 +469,11 @@ def main() -> None:
         return
 
     if args.command == "resend":
-        if not config.mailgun.enabled:
-            print("Email notifications are disabled (mailgun.enabled = false); nothing sent.")
+        if not config.notifications_enabled:
+            print(
+                "Email notifications are disabled (mailgun.enabled and smtp.enabled "
+                "are both false); nothing sent."
+            )
             return
         updates = asyncio.run(monitor.resend_unnotified())
         if not updates:
