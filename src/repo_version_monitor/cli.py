@@ -311,7 +311,8 @@ def main() -> None:
                     product.provider,
                     repository_cell(product),
                     product.branch or "-",
-                    product.suffix or "-",
+                    # "/" rather than "-", which reads like the start of a suffix.
+                    product.suffix or "/",
                     latest_tag,
                 )
             )

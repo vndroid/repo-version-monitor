@@ -216,6 +216,24 @@ def test_add_with_suffix_and_list_column(tmp_path: Path, capsys, monkeypatch) ->
     ]
 
 
+def test_list_shows_slash_for_products_without_a_suffix(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[[products]]\nname = "httpx"\nrepository = "encode/httpx"\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["repo-version-monitor", "--config", str(config_path), "list"]
+    )
+
+    main()
+
+    # "-" would read like the beginning of a suffix such as "-ee".
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[1].split()[:6] == ["01", "httpx", "github", "encode/httpx", "-", "/"]
+
+
 def test_list_shows_stored_latest_tags(tmp_path: Path, capsys, monkeypatch) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text(

@@ -117,7 +117,7 @@ suffix = "-ee|-ce"
 
 注意每个分隔出来的部分都是**字面后缀**而不是正则片段：`.` 就是点本身，不会当成通配符，因此 `.Final` 只匹配 `.Final`。写空的分支（`-ee|`、`-ee||-ce`）会报错，多半是笔误。
 
-`list` 的 `SUFFIX` 列会显示每条记录跟踪的后缀，未配置显示 `-`。
+`list` 的 `SUFFIX` 列会显示每条记录跟踪的后缀，未配置显示 `/` 或 `-`。
 
 **suffix 不属于产品身份**：它只决定读取同一个仓库的哪些标签，因此不参与配置去重，也不在数据库主键里。带来两个后果：
 
@@ -291,7 +291,7 @@ uv run repo-version-monitor --config config.toml delete --name grafana [--reposi
 uv run repo-version-monitor --config config.toml list
 ```
 
-默认按产品名排序（不区分大小写，等同 `--sort-by-name`）；加 `--sort-by-repository` 可改为按 repository（次级按 branch）排序，两个参数互斥。输出中的 `PROVIDER` 列标明每条记录来自哪个供应商，`SUFFIX` 列标明跟踪的版本后缀（未配置显示 `-`）；self-managed 实例上的项目在 `REPOSITORY` 列带上实例域名（如 `jihulab.com/example/project`），与 `add` 的写法一致。
+默认按产品名排序（不区分大小写，等同 `--sort-by-name`）；加 `--sort-by-repository` 可改为按 repository（次级按 branch）排序，两个参数互斥。输出中的 `PROVIDER` 列标明每条记录来自哪个供应商，`SUFFIX` 列标明跟踪的版本后缀（未配置显示 `/`）；self-managed 实例上的项目在 `REPOSITORY` 列带上实例域名（如 `jihulab.com/example/project`），与 `add` 的写法一致。
 
 ### 发送测试邮件
 
