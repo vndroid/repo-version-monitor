@@ -155,6 +155,83 @@ def test_pick_without_suffix_rejects_any_suffix() -> None:
     assert pick_latest_version_tag(_tags("v1.2.3-ubuntu", "v1.2.3-ee")) is None
 
 
+def test_pick_with_prefix_ignores_it_when_comparing() -> None:
+    # Only the "1.1.1" part of "release-1.1.1" is compared, so a text sort
+    # ("release-1.9.0" > "release-1.10.0") must not decide the winner.
+    tags = _tags("release-1.10.0", "release-1.9.0", "release-1.2.3")
+
+    picked = pick_latest_version_tag(tags, prefix="release-")
+
+    assert picked is not None and picked.name == "release-1.10.0"
+
+
+def test_pick_with_prefix_skips_tags_without_it() -> None:
+    # A prefix selects a tag family; plain tags belong to another one.
+    tags = _tags("v20.0.0", "release-1.1.1", "nightly-9.9.9")
+
+    picked = pick_latest_version_tag(tags, prefix="release-")
+
+    assert picked is not None and picked.name == "release-1.1.1"
+    # And without a prefix configured, prefixed tags are ignored as before.
+    assert pick_latest_version_tag(tags).name == "v20.0.0"
+
+
+def test_pick_with_prefix_still_ignores_prereleases() -> None:
+    # "release-1.2.0-rc1" minus "release-" is not a version, so it never wins.
+    tags = _tags("release-1.2.0-rc1", "release-1.1.9", "release-nightly")
+
+    picked = pick_latest_version_tag(tags, prefix="release-")
+
+    assert picked is not None and picked.name == "release-1.1.9"
+
+
+def test_pick_with_prefix_accepts_a_v_after_it() -> None:
+    tags = _tags("release-v1.2.0", "release-v1.1.0")
+
+    assert pick_latest_version_tag(tags, prefix="release-").name == "release-v1.2.0"
+
+
+def test_pick_with_several_prefix_alternatives() -> None:
+    # A repository that renamed its tag prefix is still one product.
+    tags = _tags("rel-1.9.0", "release-1.10.0", "release-1.2.3")
+
+    picked = pick_latest_version_tag(tags, prefix="release-|rel-")
+
+    assert picked is not None and picked.name == "release-1.10.0"
+
+
+def test_pick_prefers_the_first_prefix_alternative_on_a_tie() -> None:
+    tags = _tags("rel-1.2.3", "release-1.2.3")
+
+    assert pick_latest_version_tag(tags, prefix="release-|rel-").name == "release-1.2.3"
+    assert pick_latest_version_tag(tags, prefix="rel-|release-").name == "rel-1.2.3"
+
+
+def test_pick_combines_prefix_and_suffix() -> None:
+    # Both ends must match: -ce is another edition, and the unprefixed 1.9.0-ee
+    # belongs to the tag family this product does not track.
+    tags = _tags("release-1.3.0-ee", "release-1.4.0-ce", "release-1.2.0-ee", "1.9.0-ee")
+
+    picked = pick_latest_version_tag(tags, "-ee", "release-")
+
+    assert picked is not None and picked.name == "release-1.3.0-ee"
+
+
+def test_pick_with_a_slash_prefix() -> None:
+    # "release/1.2.3" is a common tag layout; '/' is allowed in a prefix.
+    tags = _tags("release/1.2.3", "release/1.10.0")
+
+    assert pick_latest_version_tag(tags, prefix="release/").name == "release/1.10.0"
+
+
+def test_filter_for_branch_drops_the_prefix_first() -> None:
+    tags = _tags("release-13.2", "release-14.0", "release-13.1", "13.0")
+
+    filtered = filter_tags_for_branch(tags, "v13", "release-")
+
+    assert [tag.name for tag in filtered] == ["release-13.2", "release-13.1", "13.0"]
+
+
 def test_normalize_strips_v_prefix_only_before_digits() -> None:
     assert normalize_tag_name("v1.2.3") == "1.2.3"
     assert normalize_tag_name("1.2.3") == "1.2.3"

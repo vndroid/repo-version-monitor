@@ -162,6 +162,7 @@ external_url = "https://jihulab.com"
 token = "glpat-inline"
 repository = "example/project"
 branch = ""
+prefix = ""
 suffix = ""
 """.strip()
     )
@@ -265,6 +266,90 @@ def test_empty_suffix_reads_back_as_none(tmp_path: Path) -> None:
     )
 
     assert load_products(config_path)[0].suffix is None
+
+
+def test_add_product_with_prefix_round_trip(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    add_product_to_config(config_path, "tool", "acme/tool", prefix="release-")
+
+    assert 'prefix = "release-"' in config_path.read_text(encoding="utf-8")
+    assert load_products(config_path)[0].prefix == "release-"
+
+
+def test_add_product_with_prefix_and_suffix(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    add_product_to_config(
+        config_path, "tool", "acme/tool", provider="gitlab", suffix="-ee", prefix="release-"
+    )
+
+    product = load_products(config_path)[0]
+    assert (product.prefix, product.suffix) == ("release-", "-ee")
+
+
+def test_prefix_does_not_make_a_second_product(tmp_path: Path) -> None:
+    # Like the suffix, the prefix selects which tags to read: it is not part
+    # of the identity, so the repository still counts as one product.
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    add_product_to_config(config_path, "stable", "acme/tool", prefix="release-")
+    with pytest.raises(ValueError, match="already configured"):
+        add_product_to_config(config_path, "nightly", "acme/tool", prefix="nightly-")
+
+    assert len(load_products(config_path)) == 1
+
+
+def test_add_product_with_several_prefixes(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    add_product_to_config(config_path, "tool", "acme/tool", prefix="release-|rel-")
+
+    assert load_products(config_path)[0].prefix == "release-|rel-"
+
+
+@pytest.mark.parametrize("prefix", ["release -", "release!", "前缀", "release-|", "|", "a||b"])
+def test_add_product_rejects_invalid_prefix(tmp_path: Path, prefix: str) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Invalid prefix"):
+        add_product_to_config(config_path, "x", "a/b", prefix=prefix)
+
+
+def test_prefix_may_contain_a_slash(tmp_path: Path) -> None:
+    # "release/1.2.3" is a common tag layout.
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    add_product_to_config(config_path, "x", "a/b", prefix="release/")
+
+    assert load_products(config_path)[0].prefix == "release/"
+
+
+def test_empty_prefix_reads_back_as_none(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[[products]]\nname = "httpx"\nrepository = "encode/httpx"\nprefix = ""\n',
+        encoding="utf-8",
+    )
+
+    assert load_products(config_path)[0].prefix is None
+
+
+def test_editing_the_branch_keeps_the_prefix(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    add_product_to_config(config_path, "tool", "acme/tool", prefix="release-", suffix="-ee")
+
+    edit_product_branch(config_path, "tool", "v13")
+
+    product = load_products(config_path)[0]
+    assert (product.branch, product.prefix, product.suffix) == ("v13", "release-", "-ee")
 
 
 def test_load_config_reads_gitlab_section(tmp_path: Path, monkeypatch) -> None:
@@ -391,6 +476,7 @@ external_url = ""
 token = ""
 repository = "gitlab-org/gitlab-runner"
 branch = ""
+prefix = ""
 suffix = ""
 """.lstrip()
     )
@@ -565,6 +651,7 @@ external_url = ""
 token = ""
 repository = "encode/httpx"
 branch = ""
+prefix = ""
 suffix = ""
 
 [[products]]
@@ -574,6 +661,7 @@ external_url = ""
 token = ""
 repository = "postgres/postgres"
 branch = "v13"
+prefix = ""
 suffix = ""
 """.lstrip()
     )

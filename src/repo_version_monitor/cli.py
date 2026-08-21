@@ -184,6 +184,14 @@ def main() -> None:
             "starts with a dash."
         ),
     )
+    add_parser.add_argument(
+        "--prefix",
+        help=(
+            "Tag prefix to track: only tags like release-1.1.1 are considered, and the "
+            "version is compared without it. Separate alternatives with \"|\", most "
+            "preferred first: release-|rel-."
+        ),
+    )
 
     delete_parser = subparsers.add_parser("delete", parents=[common], help="Delete a product from the config.")
     delete_parser.add_argument("--name", help="Select by product name; errors if ambiguous.")
@@ -283,15 +291,19 @@ def main() -> None:
                 parsed.external_url,
                 args.token,
                 args.suffix,
+                args.prefix,
             )
         except ValueError as exc:
             add_parser.error(str(exc))
         details = f", branch {args.branch}" if args.branch else ""
+        if args.prefix:
+            details += f", prefix {args.prefix}"
         if args.suffix:
             details += f", suffix {args.suffix}"
-        prefix = f"{provider}:" if provider != DEFAULT_PROVIDER else ""
+        # Not the tag prefix: this is the "gitlab:" marker in front of the path.
+        provider_marker = f"{provider}:" if provider != DEFAULT_PROVIDER else ""
         location = f"{url_host(parsed.external_url)}/" if parsed.external_url else ""
-        print(f"Added {name} ({prefix}{location}{repository}{details}) to {args.config}.")
+        print(f"Added {name} ({provider_marker}{location}{repository}{details}) to {args.config}.")
         if args.provider is None and parsed.inferred_from_host and provider != DEFAULT_PROVIDER:
             print(f"Provider {provider} inferred from host {parsed.host}.")
         if parsed.external_url:
@@ -316,6 +328,8 @@ def main() -> None:
         if product.external_url:
             repository = f"{url_host(product.external_url)}/{repository}"
         label = f"{repository}, branch {product.branch}" if product.branch else repository
+        if product.prefix:
+            label = f"{label}, prefix {product.prefix}"
         if product.suffix:
             label = f"{label}, suffix {product.suffix}"
         if product.provider != DEFAULT_PROVIDER:
@@ -387,6 +401,8 @@ def main() -> None:
                     product.provider,
                     repository_cell(product),
                     product.branch or "-",
+                    # "/" rather than "-", which reads like part of a prefix.
+                    product.prefix or "/",
                     # "/" rather than "-", which reads like the start of a suffix.
                     product.suffix or "/",
                     latest_tag,
@@ -394,7 +410,8 @@ def main() -> None:
             )
 
         for line in _render_table(
-            ("ID", "NAME", "PROVIDER", "REPOSITORY", "BRANCH", "SUFFIX", "LATEST"), rows
+            ("ID", "NAME", "PROVIDER", "REPOSITORY", "BRANCH", "PREFIX", "SUFFIX", "LATEST"),
+            rows,
         ):
             print(line)
         return

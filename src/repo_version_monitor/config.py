@@ -11,8 +11,11 @@ import tomllib
 from repo_version_monitor.logs import read_env
 from repo_version_monitor.providers import (
     DEFAULT_PROVIDER,
+    PREFIX_SEPARATOR,
     SUFFIX_SEPARATOR,
     SUPPORTED_PROVIDERS,
+    describe_tag_pattern,
+    split_prefixes,
     split_suffixes,
 )
 from repo_version_monitor.repo_url import normalize_external_url, url_host
@@ -26,6 +29,9 @@ _PRODUCT_NAME_PATTERN = re.compile(r"[A-Za-z0-9_.-]+")
 # One tag suffix such as "-ee" or ".Final": whatever trails the version numbers.
 # Several alternatives are separated by SUFFIX_SEPARATOR: "-ee|-ce".
 _SUFFIX_PATTERN = re.compile(r"[A-Za-z0-9_.+-]+")
+# One tag prefix such as "release-" or "release/": whatever leads the version
+# numbers. Several alternatives are separated by PREFIX_SEPARATOR.
+_PREFIX_PATTERN = re.compile(r"[A-Za-z0-9_.+/-]+")
 # http(s)://host[:port][/path] — GitLab may live under a relative URL root.
 _EXTERNAL_URL_PATTERN = re.compile(
     r"https?://[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*(?::\d{1,5})?(?:/[A-Za-z0-9_.~-]+)*"
@@ -44,6 +50,8 @@ class ProductConfig:
     token: str | None = field(default=None, repr=False)
     #: Tag suffix to track, e.g. "-ee"; None tracks plain version tags.
     suffix: str | None = None
+    #: Tag prefix to track, e.g. "release-"; None tracks plain version tags.
+    prefix: str | None = None
 
 
 @dataclass(frozen=True)
@@ -150,6 +158,7 @@ def add_product_to_config(
     external_url: str | None = None,
     token: str | None = None,
     suffix: str | None = None,
+    prefix: str | None = None,
 ) -> None:
     product = ProductConfig(
         name=name,
@@ -159,6 +168,7 @@ def add_product_to_config(
         external_url=normalize_external_url(external_url) if external_url else None,
         token=token or None,
         suffix=suffix or None,
+        prefix=prefix or None,
     )
     validate_product(product)
 
@@ -337,6 +347,7 @@ def edit_product_branch(
         external_url=target.external_url,
         token=target.token,
         suffix=target.suffix,
+        prefix=target.prefix,
     )
     if any(
         _product_key(product) == _product_key(updated)
@@ -403,8 +414,8 @@ def delete_product(
 def _product_key(product: ProductConfig) -> tuple[str, str, str, str | None]:
     """What makes a product unique: same path on two instances is two products.
 
-    The tag suffix is not part of it: it selects which tags of the same
-    repository to read, so changing it keeps the recorded history.
+    The tag prefix and suffix are not part of it: they select which tags of the
+    same repository to read, so changing them keeps the recorded history.
     """
     return (product.provider, product.external_url or "", product.repository, product.branch)
 
@@ -416,7 +427,8 @@ def _product_label(product: ProductConfig) -> str:
     label = f"{repository}@{product.branch}" if product.branch else repository
     if product.provider != DEFAULT_PROVIDER:
         label = f"{product.provider}:{label}"
-    return f"{label} ({product.suffix})" if product.suffix else label
+    pattern = describe_tag_pattern(product.suffix, product.prefix)
+    return f"{label} ({pattern})" if pattern else label
 
 
 def _product_block(product: ProductConfig) -> str:
@@ -430,6 +442,7 @@ def _product_block(product: ProductConfig) -> str:
         f'token = "{_escape_toml_string(product.token or "")}"\n'
         f'repository = "{product.repository}"\n'
         f'branch = "{_escape_toml_string(product.branch or "")}"\n'
+        f'prefix = "{_escape_toml_string(product.prefix or "")}"\n'
         f'suffix = "{_escape_toml_string(product.suffix or "")}"\n'
     )
 
@@ -486,16 +499,18 @@ def load_products(path: Path) -> list[ProductConfig]:
             external_url=normalize_external_url(external_url) if external_url else None,
             token=item.get("token") or None,
             suffix=item.get("suffix") or None,
+            prefix=item.get("prefix") or None,
         )
         validate_product(product)
         logger.debug(
             "config [[products]]: name=%s provider=%s repository=%s branch=%s "
-            "external_url=%s suffix=%s token=%s",
+            "external_url=%s prefix=%s suffix=%s token=%s",
             product.name,
             product.provider,
             product.repository,
             product.branch or "(none)",
             product.external_url or "(public instance)",
+            product.prefix or "(none)",
             product.suffix or "(plain versions)",
             "set" if product.token else "not set",
         )
@@ -819,6 +834,8 @@ def validate_product(product: ProductConfig) -> None:
         )
     if product.suffix is not None:
         validate_suffix(product.suffix)
+    if product.prefix is not None:
+        validate_prefix(product.prefix)
     if product.token and product.external_url is None:
         raise ValueError(
             f"Product {product.name!r}: token requires external_url; the token for the "
@@ -837,6 +854,20 @@ def validate_suffix(suffix: str) -> None:
             f"Invalid suffix {suffix!r}: only letters (A-Z, a-z), digits, "
             f"'-', '_', '.' and '+' are allowed, e.g. \"-ee\"; separate "
             f'alternatives with "{SUFFIX_SEPARATOR}", e.g. "-ee{SUFFIX_SEPARATOR}-ce".'
+        )
+
+
+def validate_prefix(prefix: str) -> None:
+    alternatives = split_prefixes(prefix)
+    valid = alternatives and all(
+        _PREFIX_PATTERN.fullmatch(alternative) for alternative in alternatives
+    )
+    # Rejects empty alternatives too ("release-|"), which read as typos.
+    if not valid or len(alternatives) != len(prefix.split(PREFIX_SEPARATOR)):
+        raise ValueError(
+            f"Invalid prefix {prefix!r}: only letters (A-Z, a-z), digits, "
+            f"'-', '_', '.', '+' and '/' are allowed, e.g. \"release-\"; separate "
+            f'alternatives with "{PREFIX_SEPARATOR}", e.g. "release-{PREFIX_SEPARATOR}rel-".'
         )
 
 

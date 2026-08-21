@@ -20,6 +20,7 @@ from repo_version_monitor.providers import (
     GitHubClient,
     GitLabClient,
     TagProvider,
+    describe_tag_pattern,
     filter_tags_for_branch,
     normalize_tag_name,
     pick_latest_version_tag,
@@ -31,8 +32,8 @@ logger = logging.getLogger(__name__)
 def product_key(product: ProductConfig) -> tuple[str, str, str, str | None]:
     """Database key of a product: provider, instance, repository, branch.
 
-    The tag suffix is not part of it, so changing it in the config keeps the
-    stored version and the next check reports it as a normal update.
+    The tag prefix and suffix are not part of it, so changing them in the config
+    keeps the stored version and the next check reports it as a normal update.
     """
     return (product.provider, product.external_url or "", product.repository, product.branch)
 
@@ -45,7 +46,8 @@ def product_label(product: ProductConfig) -> str:
     label = f"{repository}@{product.branch}" if product.branch else repository
     if product.provider != "github":
         label = f"{product.provider}:{label}"
-    return f"{label} ({product.suffix})" if product.suffix else label
+    pattern = describe_tag_pattern(product.suffix, product.prefix)
+    return f"{label} ({pattern})" if pattern else label
 
 
 class VersionMonitor:
@@ -113,6 +115,7 @@ class VersionMonitor:
                 repo, branch, provider = product.repository, product.branch, product.provider
                 instance = product.external_url or ""
                 suffix = product.suffix or ""
+                prefix = product.prefix or ""
                 label = product_label(product)
                 # One failing repository must not abort checks for the rest.
                 try:
@@ -121,14 +124,14 @@ class VersionMonitor:
                     logger.exception("Failed to fetch tags for %s", label)
                     continue
                 if branch:
-                    tags = filter_tags_for_branch(tags, branch)
+                    tags = filter_tags_for_branch(tags, branch, prefix)
 
                 if not tags:
                     logger.warning("No tags found for %s", label)
                     continue
 
                 # The API's list order is unreliable; pick the highest version tag.
-                latest = pick_latest_version_tag(tags, suffix)
+                latest = pick_latest_version_tag(tags, suffix, prefix)
                 if latest is None:
                     logger.warning(
                         "No version-like tags for %s; falling back to the first listed tag.",

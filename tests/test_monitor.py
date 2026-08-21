@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from repo_version_monitor.config import (
@@ -12,6 +13,17 @@ from repo_version_monitor.config import (
     ProductConfig,
 )
 from repo_version_monitor.monitor import VersionMonitor, product_key, product_label
+from repo_version_monitor.providers import Tag
+
+
+class _FakeProvider:
+    """Returns a fixed tag list, whatever repository is asked for."""
+
+    def __init__(self, *names: str) -> None:
+        self.tags = [Tag(name=name, commit_sha="sha") for name in names]
+
+    async def fetch_tags(self, client, repository: str) -> list[Tag]:
+        return self.tags
 
 
 def _monitor(tmp_path: Path, products: list[ProductConfig]) -> VersionMonitor:
@@ -74,6 +86,37 @@ def test_self_managed_products_get_their_own_client(tmp_path: Path) -> None:
     assert monitor.client_for(other).token is None
 
 
+def test_check_picks_the_highest_prefixed_tag(tmp_path: Path) -> None:
+    # End to end: only "release-" tags count, and 1.10.0 beats 1.9.0 because
+    # the prefix is dropped before the version numbers are compared.
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
+    product = ProductConfig(name="tool", repository="acme/tool", prefix="release-")
+    monitor = _monitor(tmp_path, [product])
+    monitor.providers["github"] = _FakeProvider(
+        "v99.0.0", "release-1.9.0", "release-1.10.0", "release-1.11.0-rc1"
+    )
+
+    updates = asyncio.run(monitor.check_once())
+
+    stored = monitor.store.get_product("acme/tool")
+    assert stored is not None and stored.latest_tag == "release-1.10.0"
+    # notify_on_first_seen is false, so the first check only records the tag.
+    assert updates == []
+
+
+def test_check_reports_an_update_between_prefixed_tags(tmp_path: Path) -> None:
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
+    product = ProductConfig(name="tool", repository="acme/tool", prefix="release-")
+    monitor = _monitor(tmp_path, [product])
+    monitor.store.initialize()
+    monitor.store.upsert_product("tool", "acme/tool", "release-1.9.0")
+    monitor.providers["github"] = _FakeProvider("release-1.9.0", "release-1.10.0")
+
+    updates = asyncio.run(monitor.check_once())
+
+    assert [(u.old_tag, u.new_tag) for u in updates] == [("release-1.9.0", "release-1.10.0")]
+
+
 def test_product_key_ignores_the_suffix_but_the_label_shows_it() -> None:
     product = ProductConfig(
         name="internal",
@@ -90,6 +133,15 @@ def test_product_key_ignores_the_suffix_but_the_label_shows_it() -> None:
         ProductConfig(**{**product.__dict__, "suffix": None})
     )
     assert product_label(product) == "gitlab:git.mycorp.com/team/app@v13 (-ee)"
+    # The prefix is not part of the key either; the label shows the tag shape
+    # it matches, with "*" standing in for the version numbers.
+    with_prefix = ProductConfig(**{**product.__dict__, "prefix": "release-"})
+    assert product_key(with_prefix) == product_key(product)
+    assert product_label(with_prefix) == "gitlab:git.mycorp.com/team/app@v13 (release-*-ee)"
+    assert (
+        product_label(ProductConfig("tool", "acme/tool", prefix="release-"))
+        == "acme/tool (release-*)"
+    )
     assert product_key(ProductConfig("httpx", "encode/httpx")) == (
         "github",
         "",

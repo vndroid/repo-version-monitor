@@ -63,6 +63,8 @@ password = ""
 # suffix tracks tags carrying it, e.g. "-ee" for gitlab-org/gitlab; empty means
 # plain version tags such as v1.2.3. Several alternatives are separated by "|",
 # most preferred first: "-ee|-ce".
+# prefix does the same at the other end, e.g. "release-" for release-1.1.1:
+# only tags carrying it are considered, and the version is compared without it.
 [[products]]
 name = "httpx"
 provider = ""
@@ -70,6 +72,7 @@ external_url = ""
 token = ""
 repository = "encode/httpx"
 branch = ""
+prefix = ""
 suffix = ""
 
 [[products]]
@@ -79,6 +82,7 @@ external_url = ""
 token = ""
 repository = "fastapi/fastapi"
 branch = ""
+prefix = ""
 suffix = ""
 
 [[products]]
@@ -88,6 +92,7 @@ external_url = ""
 token = ""
 repository = "gitlab-org/gitlab-runner"
 branch = ""
+prefix = ""
 suffix = ""
 
 [[products]]
@@ -97,6 +102,7 @@ external_url = ""
 token = ""
 repository = "gitlab-org/gitlab"
 branch = ""
+prefix = ""
 suffix = "-ee"
 
 [[products]]
@@ -106,4 +112,5 @@ external_url = "https://jihulab.com"
 token = ""
 repository = "example/project"
 branch = ""
+prefix = ""
 suffix = ""

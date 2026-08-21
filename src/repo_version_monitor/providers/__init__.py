@@ -7,13 +7,18 @@ SUPPORTED_PROVIDERS, then wire it up in monitor.VersionMonitor.
 """
 
 from repo_version_monitor.providers.base import (
+    PREFIX_SEPARATOR,
     SUFFIX_SEPARATOR,
+    TAG_PART_SEPARATOR,
     Tag,
     TagProvider,
+    describe_tag_pattern,
     filter_tags_for_branch,
     normalize_tag_name,
     pick_latest_version_tag,
+    split_prefixes,
     split_suffixes,
+    strip_tag_prefix,
 )
 from repo_version_monitor.providers.github import GitHubClient, GitHubGraphQLError
 from repo_version_monitor.providers.gitlab import GitLabClient
@@ -44,11 +49,16 @@ __all__ = [
     "GitHubClient",
     "GitHubGraphQLError",
     "GitLabClient",
+    "PREFIX_SEPARATOR",
     "SUFFIX_SEPARATOR",
+    "TAG_PART_SEPARATOR",
     "Tag",
     "TagProvider",
+    "describe_tag_pattern",
     "filter_tags_for_branch",
     "normalize_tag_name",
     "pick_latest_version_tag",
+    "split_prefixes",
     "split_suffixes",
+    "strip_tag_prefix",
 ]
