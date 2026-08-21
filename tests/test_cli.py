@@ -383,9 +383,48 @@ repository = "encode/httpx"
     main()
 
     # The stored rows must line up with the config entries, suffix included.
+    # LATEST drops the suffix: it already has its own column.
     lines = capsys.readouterr().out.splitlines()
-    assert lines[1].split()[-1] == "19.2.3-ee"
+    assert lines[1].split()[-2:] == ["-ee", "19.2.3"]
     assert lines[2].split()[-1] == "0.28.1"
+
+
+def test_list_latest_drops_the_prefix(tmp_path: Path, capsys, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[database]
+path = "versions.sqlite3"
+
+[[products]]
+name = "tool"
+repository = "acme/tool"
+prefix = "release-"
+
+[[products]]
+name = "odd"
+repository = "acme/odd"
+prefix = "release-"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    store = VersionStore(tmp_path / "versions.sqlite3")
+    store.initialize()
+    store.upsert_product("tool", "acme/tool", "release-1.10.0")
+    # check stores the first listed tag when a repository has no version tag.
+    store.upsert_product("odd", "acme/odd", "nightly")
+    monkeypatch.setattr(
+        sys, "argv", ["repo-version-monitor", "--config", str(config_path), "list"]
+    )
+
+    main()
+
+    lines = capsys.readouterr().out.splitlines()
+    # (PREFIX, LATEST) per product name.
+    rows = {line.split()[1]: (line.split()[5], line.split()[-1]) for line in lines[1:]}
+    assert rows["tool"] == ("release-", "1.10.0")
+    # A tag that is not a release tag for this product is shown as it is.
+    assert rows["odd"] == ("release-", "nightly")
 
 
 def test_add_unknown_host_without_provider_exits(tmp_path: Path, capsys, monkeypatch) -> None:

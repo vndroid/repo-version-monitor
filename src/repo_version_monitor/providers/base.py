@@ -63,6 +63,28 @@ def strip_tag_prefix(name: str, prefix: str | None = "") -> str:
     return name
 
 
+def plain_version_name(name: str, suffix: str = "", prefix: str = "") -> str:
+    """The version part of a tag: the configured prefix and suffix removed.
+
+    "release-1.10.0" with prefix "release-" reads as "1.10.0", "19.2.3-ee" with
+    suffix "-ee" as "19.2.3", and a leading "v" goes too. Tags that are not a
+    release tag for this product are returned unchanged — `check` falls back to
+    the first listed tag for repositories that carry no version-like tag.
+    """
+    # An empty alternative means "nothing to strip at this end".
+    for start in split_prefixes(prefix) or [""]:
+        if not name.startswith(start):
+            continue
+        core = name[len(start) :]
+        for end in split_suffixes(suffix) or [""]:
+            if end and not core.endswith(end):
+                continue
+            version = core[: -len(end)] if end else core
+            if _plain_version(version) is not None:
+                return normalize_tag_name(version)
+    return name
+
+
 @dataclass(frozen=True)
 class Tag:
     """A repository tag, provider-agnostic."""

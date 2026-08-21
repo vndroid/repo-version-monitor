@@ -405,6 +405,16 @@ uv run repo-version-monitor --config config.toml list
 
 默认按产品名排序（不区分大小写，等同 `--sort-by-name`）；加 `--sort-by-repository` 可改为按 repository（次级按 branch）排序，两个参数互斥。输出中的 `PROVIDER` 列标明每条记录来自哪个供应商，`PREFIX`、`SUFFIX` 两列标明跟踪的版本前缀与后缀（未配置显示 `/`）；self-managed 实例上的项目在 `REPOSITORY` 列带上实例域名（如 `jihulab.com/example/project`），与 `add` 的写法一致。
 
+`LATEST` 列**只显示纯版本号**：数据库里存的是标签原名（`release-1.10.0`、`19.2.3-ee`），显示时按该产品配置的前缀、后缀剥掉，前导 `v` 也一并去掉，这样各行版本号能对齐着比。前缀、后缀本来就各有一列，不必重复：
+
+```
+ID  NAME    PROVIDER  REPOSITORY         BRANCH  PREFIX    SUFFIX  LATEST
+01  gitlab  gitlab    gitlab-org/gitlab  -       /         -ee     19.2.3
+02  tool    github    acme/tool          -       release-  /       1.10.0
+```
+
+剥不掉的情况原样显示——仓库里一个版本号形态的标签都没有时，`check` 会退回记录列表里的第一个标签，这类值不会被硬套格式。
+
 ### 发送测试邮件
 
 命令参考：

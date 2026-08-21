@@ -8,6 +8,7 @@ from repo_version_monitor.providers import (
     filter_tags_for_branch,
     normalize_tag_name,
     pick_latest_version_tag,
+    plain_version_name,
 )
 from repo_version_monitor.providers.github import GitHubTag
 
@@ -222,6 +223,28 @@ def test_pick_with_a_slash_prefix() -> None:
     tags = _tags("release/1.2.3", "release/1.10.0")
 
     assert pick_latest_version_tag(tags, prefix="release/").name == "release/1.10.0"
+
+
+def test_plain_version_name_strips_the_configured_affixes() -> None:
+    assert plain_version_name("release-1.10.0", prefix="release-") == "1.10.0"
+    assert plain_version_name("19.2.3-ee", "-ee") == "19.2.3"
+    assert plain_version_name("release-1.3.0-ee", "-ee", "release-") == "1.3.0"
+    # A leading "v" goes too, so every row of the LATEST column reads alike.
+    assert plain_version_name("release-v1.2.0", prefix="release-") == "1.2.0"
+    assert plain_version_name("1.2.3") == "1.2.3"
+
+
+def test_plain_version_name_tries_every_alternative() -> None:
+    assert plain_version_name("rel-1.2.3", prefix="release-|rel-") == "1.2.3"
+    assert plain_version_name("19.2.3-ce", "-ee|-ce") == "19.2.3"
+
+
+def test_plain_version_name_keeps_tags_it_cannot_parse() -> None:
+    # check falls back to the first listed tag when a repository has no
+    # version-like tag at all; showing it unchanged beats mangling it.
+    assert plain_version_name("nightly", prefix="release-") == "nightly"
+    assert plain_version_name("release-nightly", prefix="release-") == "release-nightly"
+    assert plain_version_name("1.2.3-ubuntu", "-ee") == "1.2.3-ubuntu"
 
 
 def test_filter_for_branch_drops_the_prefix_first() -> None:

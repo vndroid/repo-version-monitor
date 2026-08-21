@@ -26,7 +26,11 @@ from repo_version_monitor.http_client import describe as describe_proxy
 from repo_version_monitor.http_client import new_async_client
 from repo_version_monitor.logs import configure_logging, resolve_level
 from repo_version_monitor.monitor import VersionMonitor, product_key
-from repo_version_monitor.providers import DEFAULT_PROVIDER, SUPPORTED_PROVIDERS
+from repo_version_monitor.providers import (
+    DEFAULT_PROVIDER,
+    SUPPORTED_PROVIDERS,
+    plain_version_name,
+)
 from repo_version_monitor.repo_url import parse_repository_input, url_host
 
 
@@ -431,7 +435,14 @@ def main() -> None:
         rows = []
         for index, product in enumerate(sorted(products, key=sort_key), start=1):
             stored = stored_by_product.get(product_key(product))
-            latest_tag = stored.latest_tag if stored and stored.latest_tag else "(not checked yet)"
+            # LATEST shows the version only: the prefix and suffix already have
+            # their own columns, and repeating them makes the versions harder
+            # to compare at a glance.
+            latest_tag = (
+                plain_version_name(stored.latest_tag, product.suffix or "", product.prefix or "")
+                if stored and stored.latest_tag
+                else "(not checked yet)"
+            )
             rows.append(
                 (
                     str(index).zfill(id_width),
