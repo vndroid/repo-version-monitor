@@ -467,6 +467,54 @@ repository = "encode/httpx"
     return config_path
 
 
+def _run_check(config_path: Path, monkeypatch, *check_args: str) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["repo-version-monitor", "--config", str(config_path), "check", *check_args],
+    )
+    main()
+
+
+@pytest.mark.parametrize(
+    "check_args", [("nope",), ("--name", "nope"), ("nope", "--name", "nope")]
+)
+def test_check_takes_the_name_positionally(
+    tmp_path: Path, capsys, monkeypatch, check_args: tuple[str, ...]
+) -> None:
+    # `check grafana` is shorthand for `check --name grafana`; an unknown name
+    # never reaches the network, which is what makes it testable here.
+    config_path = _verbose_config(tmp_path)
+
+    _run_check(config_path, monkeypatch, *check_args)
+
+    assert "No product named 'nope' in the config." in capsys.readouterr().out
+
+
+def test_check_rejects_two_different_names(tmp_path: Path, capsys, monkeypatch) -> None:
+    config_path = _verbose_config(tmp_path)
+
+    with pytest.raises(SystemExit):
+        _run_check(config_path, monkeypatch, "httpx", "--name", "other")
+
+    assert "Conflicting names" in capsys.readouterr().err
+
+
+def test_check_positional_name_combines_with_only_blank(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    config_path = _verbose_config(tmp_path)
+    store = VersionStore(tmp_path / "versions.sqlite3")
+    store.initialize()
+    store.upsert_product("httpx", "encode/httpx", "0.28.1")
+
+    _run_check(config_path, monkeypatch, "httpx", "--only-blank")
+
+    out = capsys.readouterr().out
+    assert "Checking 1 product(s) named 'httpx'." in out
+    assert "All products already have a latest tag" in out
+
+
 @pytest.mark.parametrize("flags", [["--verbose"], ["-vv"], ["-v", "-v"]])
 def test_verbose_logs_config_and_environment(
     tmp_path: Path, caplog, monkeypatch, flags: list[str]
@@ -501,8 +549,10 @@ def test_single_v_stays_at_info(tmp_path: Path, caplog, monkeypatch) -> None:
 
     with caplog.at_level(logging.DEBUG):
         main()
+        # Inside the block: on exit caplog restores the level it found on
+        # entry, which is whatever the previous test happened to leave behind.
+        assert logging.getLogger().level == logging.INFO
 
-    assert logging.getLogger().level == logging.INFO
     assert not [record for record in caplog.records if record.levelno == logging.DEBUG]
 
 

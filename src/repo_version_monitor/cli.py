@@ -141,6 +141,14 @@ def main() -> None:
         "--name",
         help="Only check products with this name; all same-name entries are checked.",
     )
+    # `check grafana` is the shorthand for `check --name grafana`; --name keeps
+    # working, and 'edit' and 'delete' take a name the same way.
+    check_parser.add_argument(
+        "positional_name",
+        nargs="?",
+        metavar="NAME",
+        help="Same as --name: only check products with this name.",
+    )
     check_parser.add_argument(
         "--only-blank",
         action="store_true",
@@ -284,6 +292,13 @@ def main() -> None:
     run_parser.add_argument("--interval", type=int, default=None, help="Seconds between checks.")
 
     args = parser.parse_args()
+    if args.command == "check" and args.positional_name is not None:
+        if args.name is not None and args.name != args.positional_name:
+            check_parser.error(
+                f"Conflicting names: {args.positional_name!r} and --name {args.name!r}. "
+                "Give the name once."
+            )
+        args.name = args.positional_name
     # SUPPRESS leaves the attributes unset when the flag is absent.
     args.config = getattr(args, "config", None) or Path("config.toml")
     args.log_level = getattr(args, "log_level", None)

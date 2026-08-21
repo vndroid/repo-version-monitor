@@ -92,9 +92,9 @@ Proxy: socks5://127.0.0.1:1080 (authenticated)
 
 每个产品都有一个 `provider` 字段，留空或缺省均为 `github`，因此旧配置无需改动即可继续使用。目前支持：
 
-| provider | 接口 | 仓库写法 |
-| --- | --- | --- |
-| `github` | GraphQL + REST | `owner/name` |
+| provider | 接口                                             | 仓库写法                                               |
+|----------|--------------------------------------------------|--------------------------------------------------------|
+| `github` | GraphQL + REST                                   | `owner/name`                                           |
 | `gitlab` | [REST API v4](https://docs.gitlab.com/api/tags/) | `namespace/project`，支持子组 `group/subgroup/project` |
 
 `add` 命令可以直接粘贴完整仓库地址，由域名自动判断 provider，详见[仓库参数的写法](#仓库参数的写法)。
@@ -253,22 +253,22 @@ uv run repo-version-monitor --config config.toml format
 
 补全时字符串类配置一律写成空值 `""`，含义是"用内置默认值"，因此不必手填也不会覆盖你已经写好的值：
 
-| 配置项 | 留空时的默认值 |
-| --- | --- |
-| `products.provider` | `github` |
-| `products.branch` | 不限分支，跟踪全部标签 |
-| `database.path` | `versions.sqlite3` |
-| `github.token` / `gitlab.token` / `mailgun.api_key` | 视为未设置，回退到环境变量 |
-| `products.external_url` | 官方实例（github.com / gitlab.com） |
-| `products.token` | 匿名访问该实例 |
-| `products.prefix` | 只认纯版本号 `v1.2.3` |
-| `products.suffix` | 只认纯版本号 `v1.2.3` |
-| `mailgun.api_url` | `https://api.mailgun.net/v3` |
-| `smtp.port` | `587` |
-| `smtp.encryption` | `starttls` |
-| `smtp.username` / `smtp.password` | 免认证，密码回退到 `SMTP_PASSWORD` |
-| `proxy.type` | `http` |
-| `proxy.port` | `8080` |
+| 配置项                                              | 留空时的默认值                      |
+|-----------------------------------------------------|-------------------------------------|
+| `products.provider`                                 | `github`                            |
+| `products.branch`                                   | 不限分支，跟踪全部标签              |
+| `database.path`                                     | `versions.sqlite3`                  |
+| `github.token` / `gitlab.token` / `mailgun.api_key` | 视为未设置，回退到环境变量          |
+| `products.external_url`                             | 官方实例（github.com / gitlab.com） |
+| `products.token`                                    | 匿名访问该实例                      |
+| `products.prefix`                                   | 只认纯版本号 `v1.2.3`               |
+| `products.suffix`                                   | 只认纯版本号 `v1.2.3`               |
+| `mailgun.api_url`                                   | `https://api.mailgun.net/v3`        |
+| `smtp.port`                                         | `587`                               |
+| `smtp.encryption`                                   | `starttls`                          |
+| `smtp.username` / `smtp.password`                   | 免认证，密码回退到 `SMTP_PASSWORD`  |
+| `proxy.type`                                        | `http`                              |
+| `proxy.port`                                        | `8080`                              |
 
 `format` 是幂等的，重复执行不会再产生改动。
 
@@ -359,21 +359,21 @@ uv run repo-version-monitor --config config.toml add acme/tool --prefix 'release
 
 值不以 `-` 开头，写成 `--prefix release-` 即可。可与 `--suffix` 同时给。含义见[版本前缀 prefix](#版本前缀-prefix)。
 
-### 修改已有记录分支、前缀与后缀
+### 修改分支、前缀与后缀
 
 命令参考：
 
 ```bash
-uv run repo-version-monitor --config config.toml edit grafana --branch "13.0"
+uv run repo-version-monitor --config config.toml edit grafana --branch 13.0
 uv run repo-version-monitor --config config.toml edit sqlite --prefix "version-"
 
 ## 三个参数可以一次给多个，只改给出的那些
-uv run repo-version-monitor --config config.toml edit example --branch "v20" --prefix "release-" --suffix="-ce"
+uv run repo-version-monitor --config config.toml edit gitlab --branch v19 --prefix "release-" --suffix=-ee
 ```
 
 第一个参数是产品名（`list` 的 `NAME` 列），存在重名时用 `--repository` 精确指定。`--branch`、`--prefix`、`--suffix` 至少要给一个，否则报错退出；**没给的字段保持原样**，赋空值（`--branch ""`、`--prefix ""`）为清除。
 
-`--suffix` 的值以 `-` 开头，要写成 `--suffix=-ee` 这种等号形式；`--prefix` 不以 `-` 开头，`--prefix "release-"` 即可，含 `|` 时记得加引号，建议都默认用引号。
+`--suffix` 的值以 `-` 开头，要写成 `--suffix=-ee` 这种等号形式；`--prefix` 不以 `-` 开头，`--prefix "release-"` 即可，含 `|` 时记得加引号。
 
 新值非法（如 `--prefix "release |"`）时报错退出，配置文件保持不变。执行成功后只列出真正变化的字段：
 
@@ -431,11 +431,14 @@ uv run repo-version-monitor --config config.toml mailtest [--ignore]
 
 ```bash
 uv run repo-version-monitor --config config.toml check [--name grafana] [--only-blank]
+
+## 名字也可以直接跟在 check 后面，等价于 --name
+uv run repo-version-monitor --config config.toml check grafana
 ```
 
-支持参数 `--name` 只检查指定名称的仓库（存在同名条目时全部检查）
+支持参数 `--name` 只检查指定名称的仓库（存在同名条目时全部检查）。名字直接写成位置参数（`check grafana`）效果完全相同，与 `edit`、`delete` 的写法一致；两种写法给了不同的名字时报错退出，给同一个名字则照常执行。
 
-支持参数 `--only-blank` 只检查数据库中还没有版本记录的仓库（`list` 中状态为 `(not checked yet)` 的），支持与 `--name` 参数组合使用。
+支持参数 `--only-blank` 只检查数据库中还没有版本记录的仓库（`list` 中状态为 `(not checked yet)` 的），支持与名称参数组合使用（`check grafana --only-blank`）。
 
 ### 循环定时检查
 
@@ -459,12 +462,12 @@ uv run repo-version-monitor --config config.toml run
 
 `-v` 可叠加，也可以写在子命令前后任意位置：
 
-| 参数 | 级别 | 输出内容 |
-| --- | --- | --- |
-| 默认 | `check` 为 WARNING，其余 INFO | 只报结果与异常 |
-| `-v` | INFO | 每个产品的检查结果、HTTP 请求行 |
-| `-vv` / `--verbose` | DEBUG | 读了哪个配置文件、每段有哪些键、每个 `[[products]]` 的解析结果、查了哪些环境变量、各配置项最终生效值与来源 |
-| `-vvv` | DEBUG | 再放开 httpcore 等底层库（每次 socket 读写都会打印，排查代理/TLS 时才需要） |
+| 参数                | 级别                          | 输出内容                                                                                                   |
+|---------------------|-------------------------------|------------------------------------------------------------------------------------------------------------|
+| 默认                | `check` 为 WARNING，其余 INFO | 只报结果与异常                                                                                             |
+| `-v`                | INFO                          | 每个产品的检查结果、HTTP 请求行                                                                            |
+| `-vv` / `--verbose` | DEBUG                         | 读了哪个配置文件、每段有哪些键、每个 `[[products]]` 的解析结果、查了哪些环境变量、各配置项最终生效值与来源 |
+| `-vvv`              | DEBUG                         | 再放开 httpcore 等底层库（每次 socket 读写都会打印，排查代理/TLS 时才需要）                                |
 
 `--log-level` 优先级最高，与 `-v` 同时出现时以它为准。
 
@@ -504,11 +507,11 @@ uv run --extra dev pytest tests/ -q
 
 ### 配置项变更
 
-| 原写法 | 现写法 | 说明 |
-| --- | --- | --- |
-| `[mailgun] base_url` | `[mailgun] api_url` | 同名不同义，按用途改名。EU 账号填 `https://api.eu.mailgun.net/v3` |
-| `[gitlab] base_url` / `[gitlab] external_url` | `[[products]] external_url` | 实例地址下放到产品级，从而支持同时监控多个自建实例 |
-| `[proxy] enable` | `[proxy] enabled` | 与 `[mailgun] enabled` 统一：配置描述状态，用形容词形式 |
+| 原写法                                        | 现写法                      | 说明                                                              |
+|-----------------------------------------------|-----------------------------|-------------------------------------------------------------------|
+| `[mailgun] base_url`                          | `[mailgun] api_url`         | 同名不同义，按用途改名。EU 账号填 `https://api.eu.mailgun.net/v3` |
+| `[gitlab] base_url` / `[gitlab] external_url` | `[[products]] external_url` | 实例地址下放到产品级，从而支持同时监控多个自建实例                |
+| `[proxy] enable`                              | `[proxy] enabled`           | 与 `[mailgun] enabled` 统一：配置描述状态，用形容词形式           |
 
 旧写法不会被静默忽略——那样会悄悄回退到默认值，把请求发去错误的地址。`load_config` 和 `format` 都会报错并提示新写法（附带原值方便直接复制）：
 
