@@ -5,7 +5,7 @@ import pytest
 from repo_version_monitor.config import (
     add_product_to_config,
     delete_product,
-    edit_product_branch,
+    edit_product,
     format_config,
     load_config,
     load_products,
@@ -346,7 +346,7 @@ def test_editing_the_branch_keeps_the_prefix(tmp_path: Path) -> None:
     config_path.write_text("", encoding="utf-8")
     add_product_to_config(config_path, "tool", "acme/tool", prefix="release-", suffix="-ee")
 
-    edit_product_branch(config_path, "tool", "v13")
+    edit_product(config_path, "tool", branch="v13")
 
     product = load_products(config_path)[0]
     assert (product.branch, product.prefix, product.suffix) == ("v13", "release-", "-ee")
@@ -498,26 +498,26 @@ repository = "encode/httpx"
         load_products(config_path)
 
 
-def test_edit_product_branch(tmp_path: Path) -> None:
+def test_edit_branch(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text("", encoding="utf-8")
     add_product_to_config(config_path, "grafana", "grafana/grafana")
 
-    old_branch, product = edit_product_branch(config_path, "grafana", "13.0")
+    old, product = edit_product(config_path, "grafana", branch="13.0")
 
-    assert old_branch is None
+    assert old.branch is None
     assert product.branch == "13.0"
     assert load_products(config_path)[0].branch == "13.0"
 
 
-def test_edit_product_branch_clear_with_empty_string(tmp_path: Path) -> None:
+def test_edit_branch_clear_with_empty_string(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text("", encoding="utf-8")
     add_product_to_config(config_path, "pg", "postgres/postgres", branch="v13")
 
-    old_branch, product = edit_product_branch(config_path, "pg", "")
+    old, product = edit_product(config_path, "pg", branch="")
 
-    assert old_branch == "v13"
+    assert old.branch == "v13"
     assert product.branch is None
 
 
@@ -526,7 +526,7 @@ def test_edit_unknown_name_raises(tmp_path: Path) -> None:
     config_path.write_text("", encoding="utf-8")
 
     with pytest.raises(ValueError, match="No product named"):
-        edit_product_branch(config_path, "nope", "v13")
+        edit_product(config_path, "nope", branch="v13")
 
 
 def test_edit_ambiguous_name_requires_repository(tmp_path: Path) -> None:
@@ -536,11 +536,79 @@ def test_edit_ambiguous_name_requires_repository(tmp_path: Path) -> None:
     add_product_to_config(config_path, "dup", "b/two")
 
     with pytest.raises(ValueError, match="Use --repository"):
-        edit_product_branch(config_path, "dup", "v13")
+        edit_product(config_path, "dup", branch="v13")
 
     # Disambiguated by repository it succeeds.
-    _, product = edit_product_branch(config_path, "dup", "v13", repository="b/two")
+    _, product = edit_product(config_path, "dup", "b/two", branch="v13")
     assert product.repository == "b/two"
+
+
+def test_edit_prefix_and_suffix(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    add_product_to_config(config_path, "sqlite", "sqlite/sqlite")
+
+    old, product = edit_product(config_path, "sqlite", prefix="version-", suffix="-ee")
+
+    assert (old.prefix, old.suffix) == (None, None)
+    assert (product.prefix, product.suffix) == ("version-", "-ee")
+    stored = load_products(config_path)[0]
+    assert (stored.prefix, stored.suffix) == ("version-", "-ee")
+
+
+def test_edit_one_field_keeps_the_others(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    add_product_to_config(
+        config_path, "tool", "acme/tool", branch="v13", prefix="release-", suffix="-ee"
+    )
+
+    _, product = edit_product(config_path, "tool", prefix="rel-")
+
+    assert (product.branch, product.prefix, product.suffix) == ("v13", "rel-", "-ee")
+
+
+def test_edit_clears_the_prefix_with_an_empty_string(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    add_product_to_config(config_path, "tool", "acme/tool", prefix="release-")
+
+    old, product = edit_product(config_path, "tool", prefix="")
+
+    assert old.prefix == "release-" and product.prefix is None
+
+
+def test_edit_rejects_an_invalid_prefix(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    add_product_to_config(config_path, "tool", "acme/tool", prefix="release-")
+
+    with pytest.raises(ValueError, match="Invalid prefix"):
+        edit_product(config_path, "tool", prefix="release |")
+    # The config is left untouched when the new value is rejected.
+    assert load_products(config_path)[0].prefix == "release-"
+
+
+def test_edit_without_any_field_raises(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    add_product_to_config(config_path, "tool", "acme/tool")
+
+    with pytest.raises(ValueError, match="Nothing to change"):
+        edit_product(config_path, "tool")
+
+
+def test_editing_the_prefix_keeps_the_product_identity(tmp_path: Path) -> None:
+    # prefix is not part of the key, so it can never collide with another entry.
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    add_product_to_config(config_path, "tool", "acme/tool")
+    add_product_to_config(config_path, "tool13", "acme/tool", branch="v13", prefix="release-")
+
+    _, product = edit_product(config_path, "tool", prefix="release-")
+
+    assert product.prefix == "release-"
+    assert len(load_products(config_path)) == 2
 
 
 def test_edit_rejects_collision_with_existing_entry(tmp_path: Path) -> None:
@@ -550,7 +618,7 @@ def test_edit_rejects_collision_with_existing_entry(tmp_path: Path) -> None:
     add_product_to_config(config_path, "pg13", "postgres/postgres", branch="v13")
 
     with pytest.raises(ValueError, match="already configured"):
-        edit_product_branch(config_path, "pg", "v13")
+        edit_product(config_path, "pg", branch="v13")
 
 
 def test_delete_by_name(tmp_path: Path) -> None:

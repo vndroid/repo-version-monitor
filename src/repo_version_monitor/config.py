@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import hashlib
 import logging
 import os
@@ -312,16 +312,34 @@ def _section_end_index(lines: list[str], section: str) -> int:
     return end
 
 
-def edit_product_branch(
-    path: Path, name: str, branch: str | None, repository: str | None = None
-) -> tuple[str | None, ProductConfig]:
-    """Change the branch of an existing product, selected by name.
+#: Marker for "argument not given", as None and "" are real values here.
+_UNSET = object()
 
-    Returns (old_branch, updated_product). branch=None or "" clears the branch.
+#: Fields `edit` can change, in the order they are reported to the user.
+EDITABLE_FIELDS = ("branch", "prefix", "suffix")
+
+
+def edit_product(
+    path: Path,
+    name: str,
+    repository: str | None = None,
+    branch: object = _UNSET,
+    prefix: object = _UNSET,
+    suffix: object = _UNSET,
+) -> tuple[ProductConfig, ProductConfig]:
+    """Change the branch, tag prefix and/or tag suffix of one product.
+
+    The product is selected by name, narrowed by repository when several share
+    it. Every field left as _UNSET keeps its current value; None or "" clears
+    the field. Returns (old_product, updated_product).
     """
-    branch = branch or None
-    if branch is not None:
-        validate_branch(branch)
+    given = {"branch": branch, "prefix": prefix, "suffix": suffix}
+    # Empty values clear the field, the same convention the config file uses.
+    changes = {
+        field: given[field] or None for field in EDITABLE_FIELDS if given[field] is not _UNSET
+    }
+    if not changes:
+        raise ValueError("Nothing to change: pass a branch, a prefix or a suffix.")
 
     products = load_products(path)
     matches = [
@@ -339,16 +357,9 @@ def edit_product_branch(
         )
 
     target = matches[0]
-    updated = ProductConfig(
-        name=target.name,
-        repository=target.repository,
-        branch=branch,
-        provider=target.provider,
-        external_url=target.external_url,
-        token=target.token,
-        suffix=target.suffix,
-        prefix=target.prefix,
-    )
+    updated = replace(target, **changes)
+    # Catches an invalid new value (branch, prefix or suffix) before writing.
+    validate_product(updated)
     if any(
         _product_key(product) == _product_key(updated)
         for product in products
@@ -357,10 +368,7 @@ def edit_product_branch(
         raise ValueError(f"{_product_label(updated)} is already configured.")
 
     _write_products(path, [updated if product is target else product for product in products])
-    return target.branch, updated
-
-
-_UNSET = object()
+    return target, updated
 
 
 def delete_product(

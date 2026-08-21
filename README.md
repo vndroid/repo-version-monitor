@@ -359,15 +359,31 @@ uv run repo-version-monitor --config config.toml add acme/tool --prefix 'release
 
 值不以 `-` 开头，写成 `--prefix release-` 即可。可与 `--suffix` 同时给。含义见[版本前缀 prefix](#版本前缀-prefix)。
 
-### 修改追踪分支
+### 修改已有记录分支、前缀与后缀
 
 命令参考：
 
 ```bash
-uv run repo-version-monitor --config config.toml edit grafana --branch 13.0
+uv run repo-version-monitor --config config.toml edit grafana --branch "13.0"
+uv run repo-version-monitor --config config.toml edit sqlite --prefix "version-"
+
+## 三个参数可以一次给多个，只改给出的那些
+uv run repo-version-monitor --config config.toml edit example --branch "v20" --prefix "release-" --suffix="-ce"
 ```
 
-支持参数 `--name` 指定，存在重名时可用 `--repository` 精确指定，赋空值 `--branch ""` 为清除。
+第一个参数是产品名（`list` 的 `NAME` 列），存在重名时用 `--repository` 精确指定。`--branch`、`--prefix`、`--suffix` 至少要给一个，否则报错退出；**没给的字段保持原样**，赋空值（`--branch ""`、`--prefix ""`）为清除。
+
+`--suffix` 的值以 `-` 开头，要写成 `--suffix=-ee` 这种等号形式；`--prefix` 不以 `-` 开头，`--prefix "release-"` 即可，含 `|` 时记得加引号，建议都默认用引号。
+
+新值非法（如 `--prefix "release |"`）时报错退出，配置文件保持不变。执行成功后只列出真正变化的字段：
+
+```
+Updated gitlab (gitlab-org/gitlab): branch (nil) -> (v19), prefix (nil) -> (release-).
+```
+
+给的值与现状一致时提示 `already had those values`。前缀、后缀都不属于产品身份，改动它们不会重置数据库里已记录的版本，下次检查会作为一次正常更新报出来。
+
+注意 `edit` 与 `delete` 一样会顺带规范化所有 `[[products]]` 块，缺失的 `prefix`、`suffix` 等键会被补成空值。
 
 ### 删除已有记录
 

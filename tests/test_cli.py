@@ -18,6 +18,104 @@ def _run_add(config_path: Path, monkeypatch, *add_args: str) -> None:
     main()
 
 
+def _run_edit(config_path: Path, monkeypatch, *edit_args: str) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["repo-version-monitor", "--config", str(config_path), "edit", *edit_args],
+    )
+    main()
+
+
+def test_edit_prefix(tmp_path: Path, capsys, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    _run_add(config_path, monkeypatch, "sqlite/sqlite")
+    capsys.readouterr()
+
+    _run_edit(config_path, monkeypatch, "sqlite", "--prefix", "version-")
+
+    assert load_products(config_path)[0].prefix == "version-"
+    assert "prefix (nil) -> (version-)" in capsys.readouterr().out
+
+
+def test_edit_prefix_and_suffix_at_once(tmp_path: Path, capsys, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    _run_add(config_path, monkeypatch, "acme/tool", "--prefix", "release-")
+    capsys.readouterr()
+
+    # The value starts with a dash, so argparse needs the '=' form.
+    _run_edit(config_path, monkeypatch, "tool", "--prefix", "rel-", "--suffix=-ee")
+
+    product = load_products(config_path)[0]
+    assert (product.prefix, product.suffix) == ("rel-", "-ee")
+    out = capsys.readouterr().out
+    assert "prefix (release-) -> (rel-)" in out and "suffix (nil) -> (-ee)" in out
+
+
+def test_edit_branch_leaves_the_prefix_alone(tmp_path: Path, capsys, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    _run_add(config_path, monkeypatch, "acme/tool", "--prefix", "release-")
+    capsys.readouterr()
+
+    _run_edit(config_path, monkeypatch, "tool", "--branch", "v13")
+
+    product = load_products(config_path)[0]
+    assert (product.branch, product.prefix) == ("v13", "release-")
+    # Only the field that was asked for is reported.
+    out = capsys.readouterr().out
+    assert "branch (nil) -> (v13)" in out and "prefix" not in out
+
+
+def test_edit_clears_the_prefix_with_an_empty_string(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    _run_add(config_path, monkeypatch, "acme/tool", "--prefix", "release-")
+    capsys.readouterr()
+
+    _run_edit(config_path, monkeypatch, "tool", "--prefix", "")
+
+    assert load_products(config_path)[0].prefix is None
+    assert "prefix (release-) -> (nil)" in capsys.readouterr().out
+
+
+def test_edit_without_any_field_exits(tmp_path: Path, capsys, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    _run_add(config_path, monkeypatch, "acme/tool")
+
+    with pytest.raises(SystemExit):
+        _run_edit(config_path, monkeypatch, "tool")
+
+    assert "--branch, --prefix, --suffix" in capsys.readouterr().err
+
+
+def test_edit_with_an_invalid_prefix_exits(tmp_path: Path, capsys, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    _run_add(config_path, monkeypatch, "acme/tool")
+
+    with pytest.raises(SystemExit):
+        _run_edit(config_path, monkeypatch, "tool", "--prefix", "release |")
+
+    assert "Invalid prefix" in capsys.readouterr().err
+
+
+def test_edit_reports_when_nothing_changed(tmp_path: Path, capsys, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+    _run_add(config_path, monkeypatch, "acme/tool", "--prefix", "release-")
+    capsys.readouterr()
+
+    _run_edit(config_path, monkeypatch, "tool", "--prefix", "release-")
+
+    assert "already had those values" in capsys.readouterr().out
+
+
 def test_add_infers_provider_from_url(tmp_path: Path, capsys, monkeypatch) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text("", encoding="utf-8")

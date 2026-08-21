@@ -11,10 +11,11 @@ import httpx
 
 from repo_version_monitor.config import (
     _UNSET,
+    EDITABLE_FIELDS,
     add_product_to_config,
     config_file_hash,
     delete_product,
-    edit_product_branch,
+    edit_product,
     format_config,
     load_config,
     load_products,
@@ -210,12 +211,29 @@ def main() -> None:
         help="Narrow selection to this self-managed instance, e.g. https://gitlab.example.com.",
     )
 
-    edit_parser = subparsers.add_parser("edit", parents=[common], help="Edit the branch of an existing product.")
+    edit_parser = subparsers.add_parser(
+        "edit",
+        parents=[common],
+        help="Edit the branch, tag prefix or tag suffix of an existing product.",
+    )
     edit_parser.add_argument("name", help="Product name as shown by 'list'.")
     edit_parser.add_argument(
         "--branch",
-        required=True,
         help="New branch line, e.g. v13. Pass an empty string to clear the branch.",
+    )
+    edit_parser.add_argument(
+        "--prefix",
+        help=(
+            "New tag prefix, e.g. release-. Pass an empty string to clear it; "
+            'separate alternatives with "|", most preferred first.'
+        ),
+    )
+    edit_parser.add_argument(
+        "--suffix",
+        help=(
+            "New tag suffix. Write it as --suffix=-ee, since the value starts with a "
+            "dash. Pass an empty string to clear it."
+        ),
     )
     edit_parser.add_argument(
         "--repository",
@@ -339,13 +357,33 @@ def main() -> None:
         return
 
     if args.command == "edit":
-        old_branch, product = edit_product_branch(
-            args.config, args.name, args.branch, args.repository
-        )
-        print(
-            f"Updated {product.name} ({product.repository}): "
-            f"branch {old_branch or '(none)'} -> {product.branch or '(none)'}."
-        )
+        # Only the fields actually given are touched; "" clears one.
+        wanted = {
+            field: getattr(args, field)
+            for field in EDITABLE_FIELDS
+            if getattr(args, field) is not None
+        }
+        if not wanted:
+            edit_parser.error(
+                "Specify at least one of "
+                + ", ".join(f"--{field}" for field in EDITABLE_FIELDS)
+                + "."
+            )
+        try:
+            old, product = edit_product(args.config, args.name, args.repository, **wanted)
+        except ValueError as exc:
+            edit_parser.error(str(exc))
+        # Values are parenthesized so an empty one and a value that starts or
+        # ends with a dash both stand out: prefix (nil) -> (version-).
+        changes = [
+            f"{field} ({getattr(old, field) or 'nil'}) -> ({getattr(product, field) or 'nil'})"
+            for field in wanted
+            if getattr(old, field) != getattr(product, field)
+        ]
+        if changes:
+            print(f"Updated {product.name} ({product.repository}): {', '.join(changes)}.")
+        else:
+            print(f"{product.name} ({product.repository}) already had those values.")
         _sync_config_hash(args.config)
         return
 
